@@ -12,9 +12,9 @@ def log_sum_exp(a, b):
 
 
 class Lattice:
-    def __init__(self, sentence: str):
-        self.sentence = sentence
-        self.size = len(sentence)
+    def __init__(self, text: str):
+        self.text = text
+        self.size = len(text)
         self.nodes = []
         self.begin_nodes = [[] for _ in range(self.size + 1)]
         self.end_nodes = [[] for _ in range(self.size + 1)]
@@ -30,7 +30,7 @@ class Lattice:
         return node
 
     def insert(self, pos: int, length: int, vocab_id, score: float):
-        node = self._new_node(pos=pos, length=length, piece=self.sentence[pos:pos+length], id=vocab_id, score=score)
+        node = self._new_node(pos=pos, length=length, piece=self.text[pos:pos+length], id=vocab_id, score=score)
         self.begin_nodes[pos].append(node)
         self.end_nodes[pos + length].append(node)
 
@@ -75,20 +75,44 @@ class Lattice:
                 beta[lnode['node_id']] = log_prob
         return beta
 
-    def populate_marginal(self, expected_counts: Counter) -> float:
-        if not self.sentence:
+    def populate_marginal(self, expected_counts: Counter, count: int = 1) -> float:
+        """
+        Runs the forward-backward algorithm, calculates the marginal probability
+        of each node, scales it by `count`, and adds it to the `expected_counts`.
+
+        Args:
+            expected_counts: The global Counter object to update.
+            count: The frequency of the sentence/pretoken, used to scale the results.
+
+        Returns:
+            The total log-likelihood (Z) of the sentence.
+        """
+        if not self.text:
             return 0.0
+
+        # Run the forward and backward passes.
         alpha = self._forward()
         beta = self._backward()
+
+        # Z is the total log-likelihood (partition function).
         z = alpha[self.begin_nodes[self.size][0]['node_id']]
         if z == -float('inf'):
             return 0.0
+
+        # Iterate over all nodes to calculate their marginal probability.
         for nodes in self.begin_nodes:
             for node in nodes:
+                # Skip special BOS/EOS nodes.
                 if node['id'] != -1:
-                    prob = math.exp(alpha[node['node_id']] + node['score'] +
-                                  beta[self.end_nodes[node['pos']+node['length']][0]['node_id']] - z)
-                    expected_counts[node['id']] += prob
+                    
+                    # Standard textbook formula for the marginal probability of a state (node).
+                    log_prob = alpha[node['node_id']] + beta[node['node_id']] - z
+                    
+                    # Convert log-prob to a regular probability, scale by the pretoken's `count`,
+                    # and add it directly to the external Counter object.
+                    expected_counts[node['id']] += math.exp(log_prob) * count
+
+        # Return the total log-likelihood of a single instance of the sentence.
         return z
 
     def tokens(self):

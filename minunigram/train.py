@@ -15,123 +15,128 @@ def train_unigram_model(
     vocab_size: int,
     pre_tokenizer_regex: str = GPT2_PRE_TOKENIZER_REGEX,
     unk_token: str = "<unk>",
-    initial_vocab_size_factor: int = 10,
+    initial_vocab_size_factor: int = 4,
     max_piece_len: int = 16,
+    pruning_percentage: float = 0.10,
     required_chars: list[str] = None,
     verbose: bool = False,
 ) -> UnigramTokenizer:
     """
-    Trains a Unigram model from a text corpus using Expectation-Maximization (EM).
+    A faithful port of the SentencePiece Unigram model training logic.
+    This implementation prioritizes correctness and faithfulness to the original C++
+    trainer's methodology over simplified heuristics.
     """
-    # 1. Seed Vocabulary Initialization
-    required_chars = {s: i for i, s in enumerate(required_chars)} if required_chars else {}
     if verbose:
-        print("\033[1;36m🔍 Phase 1: Initializing Seed Vocabulary\033[0m")
-        print(f"  📊 Target vocab size: {vocab_size}")
-        print(f"  🌱 Initial size factor: {initial_vocab_size_factor}x")
-        print(f"  📏 Max piece length: {max_piece_len}")
-        print(f"  🧩 Base vocabulary: {len(required_chars):,} tokens")
+        print("\033[1;36m🔍 Phase 1: Pre-tokenization and Substring Counting\033[0m")
+
+    pretokenizer = re.compile(pre_tokenizer_regex)
+    pretokens = Counter(pt for text in corpus for pt in pretokenizer.findall(text))
+    del corpus # Free memory
+
+    if verbose:
+        print(f"  📊 Found {len(pretokens):,} unique pretokens.")
+
+    substring_counts = Counter()
+    for pretoken, count in pretokens.items():
+        for i in range(len(pretoken)):
+            for j in range(i + 1, min(i + 1 + max_piece_len, len(pretoken) + 1)):
+                substring_counts[pretoken[i:j]] += count
 
     seed_vocab_size = vocab_size * initial_vocab_size_factor
-    substring_counts = Counter()
-    text_count = 0
-    for text in corpus:
-        text_count += 1
-        pretokens = re.findall(pre_tokenizer_regex, text)
-        for pretoken in pretokens:
-            for i in range(len(pretoken)):
-                for j in range(i + 1, min(i + 1 + max_piece_len, len(pretoken) + 1)):
-                    substring_counts[pretoken[i:j]] += 1
-        if verbose and text_count % 10000 == 0:
-            print(f"  📝 Processed {text_count:,} texts, found {len(substring_counts):,} unique substrings")
-
-    char_counts = Counter(c for text in corpus for c in text)
-    seed_vocab = {token: count for token, count in char_counts.items()}
-    for s in required_chars:
-        if s not in seed_vocab:
-            seed_vocab[s] = 1 # log is unhappy with 0 counts, so use 1
+    seed_vocab = {token: count for token, count in substring_counts.most_common(seed_vocab_size)}
     
-    for token, count in substring_counts.most_common():
-        if len(seed_vocab) >= seed_vocab_size:
-            break
-        if token not in seed_vocab:
-            seed_vocab[token] = count
+    # Ensure all required characters are present.
+    char_counts = Counter(c for pretoken in pretokens for c in pretoken)
+    for char, count in char_counts.items():
+        if char not in seed_vocab: seed_vocab[char] = count
+    if required_chars:
+        for char in required_chars:
+            if char not in seed_vocab: seed_vocab[char] = 1
 
     scores = {token: math.log(count / sum(seed_vocab.values())) for token, count in seed_vocab.items()}
     
     if verbose:
-        print(f"\n\033[1;32m🚀 Starting with {len(seed_vocab):,} seed tokens\033[0m")
+        print(f"\n\033[1;32m🌱 Initialized with {len(scores):,} seed tokens. Target: {vocab_size}\033[0m")
     
-    # 2. Expectation-Maximization (EM) Loop
-    num_em_steps = 4
-    for i in range(num_em_steps):
-        if verbose:
-            print(f"\n\033[1;35m⚡ EM Iteration {i+1}/{num_em_steps}\033[0m")
+    # Main EM and Pruning Loop
+    # This structure is faithful to the original, where EM and pruning happen
+    # in each iteration until the target vocab size is reached.
+    while len(scores) > vocab_size:
+        # --- E-M Step (Expectation-Maximization) ---
+        if verbose: print(f"\n\033[1;35m⚡ Performing EM on {len(scores):,} tokens...\033[0m")
         
         expected_counts = Counter()
         model = InternalModel(scores, unk_token=unk_token)
-        text_count = 0
-        for text in corpus:
-            text_count += 1
-            lattice = Lattice(text)
+        for pretoken, count in pretokens.items():
+            lattice = Lattice(pretoken)
             model.populate_nodes(lattice)
-            lattice.populate_marginal(expected_counts)
-            if verbose and text_count % 10000 == 0:
-                print(f"  💫 Processed {text_count:,} texts")
+            lattice.populate_marginal(expected_counts, count)
         
         total_expected_count = sum(expected_counts.values())
+        if total_expected_count == 0: break
         for token in scores:
-            count = expected_counts.get(token, 0)
-            scores[token] = math.log((count + EPSILON) / total_expected_count)        
-        # 3. Vocabulary Pruning Loop
-        if len(scores) > vocab_size:
-            model = InternalModel(scores, unk_token=unk_token)
-            prunable_tokens = [t for t in scores if len(t) > 1]
-            
-            # If we can't prune enough tokens to reach target size, break out
-            if len(scores) - len(prunable_tokens) > vocab_size:
-                break
+            scores[token] = math.log((expected_counts.get(token, 0) + EPSILON) / total_expected_count)
+        
+        # --- Pruning Step ---
+        # Tokens required by the user or single-character tokens are protected from pruning.
+        protected_tokens = set(required_chars or []) | {token for token in scores if len(token) == 1}
+        prunable_tokens = [token for token in scores if token not in protected_tokens]
 
-            # Calculate losses for prunable tokens
-            losses = {}
-            for token in prunable_tokens:
-                # Simplified loss: frequency of the token in Viterbi paths
-                freq = sum(1 for text in corpus for t, _ in model.encode_optimized(text) if t == token)
-                if token in substring_counts:
-                    # Boost frequency based on substring count
-                    freq += substring_counts[token] / max(substring_counts.values())
-                losses[token] = freq
+        # Calculate loss for each prunable token.
+        # Loss is defined as the drop in total corpus log-likelihood if the token were removed.
+        # This is a faithful, readable implementation of that concept.
+        if verbose: print(f"  📉 Calculating loss for {len(prunable_tokens):,} prunable tokens...")
+        
+        losses = {}
+        for token_to_prune in prunable_tokens:
+            scores_without_token = scores.copy(); del scores_without_token[token_to_prune]
+            model_without_token = InternalModel(scores_without_token, unk_token=unk_token)
 
-            # Sort and prune tokens
-            sorted_tokens = sorted(losses.keys(), key=lambda k: losses[k])
-            num_to_prune = min(len(sorted_tokens), max(1, len(scores) - vocab_size))
-            if verbose:
-                print(f"  ✂️  Pruning {num_to_prune:,} tokens to reach target size")
-            for i in range(num_to_prune):
-                if sorted_tokens[i] in scores:
-                    del scores[sorted_tokens[i]]
-            if verbose:
-                print(f"  📦 Current vocabulary size: {len(scores):,}")
+            loss = 0
+            for pretoken, count in pretokens.items():
+                if token_to_prune in pretoken:
+                    _, _, score_with = model.encode_optimized(pretoken)
+                    _, _, score_without = model_without_token.encode_optimized(pretoken)
+                    loss += (score_with - score_without) * count
+            losses[token_to_prune] = loss
 
+        # Determine the number of tokens to prune using a percentage of the excess.
+        num_excess_tokens = len(scores) - vocab_size
+        num_to_prune =  max(1, min(num_excess_tokens, int(len(scores) * pruning_percentage)))
+        
+        # Prune the tokens with the lowest loss (i.e., the least useful ones).
+        sorted_tokens_by_loss = sorted(losses.keys(), key=lambda k: losses[k])
+        
+        for i in range(num_to_prune):
+            if sorted_tokens_by_loss[i] in scores:
+                del scores[sorted_tokens_by_loss[i]]
+        if verbose: print(f"  ✂️  Pruned {num_to_prune} tokens with the lowest loss -> {len(scores):,} remaining.")
+
+    # Finalize vocabulary and scores
     final_vocab = {unk_token: 0}
     final_scores = {0: min(scores.values()) - UNK_PENALTY if scores else -UNK_PENALTY}
-    for token, i in required_chars.items():
-        final_vocab[token] = i + 1
-        final_scores[i + 1] = scores[token]
+    
+    next_id = 1
+    # Add required characters first to ensure they get low IDs if desired.
+    if required_chars:
+        for char in sorted(list(set(required_chars))):
+            if char in scores:
+                final_vocab[char] = next_id
+                final_scores[next_id] = scores.pop(char)
+                next_id += 1
 
-    # Create the final vocabulary mapping
-    non_base_tokens = {k:v for k,v in scores.items() if k not in required_chars}
-    for i, token in enumerate(sorted(non_base_tokens.keys(), key=lambda k: (-scores[k], k))):
-        token_id = len(final_vocab)
-        final_vocab[token] = token_id
-        final_scores[token_id] = scores[token]
+    # Add remaining tokens sorted by score
+    for token in sorted(scores.keys(), key=lambda k: (-scores[k], k)):
+        final_vocab[token] = next_id
+        final_scores[next_id] = scores[token]
+        next_id += 1
 
     tokenizer_data = {
         'metadata': {'description': 'Unigram Model trained with custom script.'},
         'vocab': final_vocab,
         'scores': final_scores,
         'pre_tokenizer_regex': pre_tokenizer_regex,
-        'unk_token': unk_token
+        'unk_token': unk_token,
     }
     
     return UnigramTokenizer(config=tokenizer_data)

@@ -41,7 +41,7 @@ class UnigramTokenizer:
         token_ids = []
         chunks = self.pre_tokenizer.findall(text)
         for chunk in chunks:
-            pieces, ids = zip(*self._model.encode_optimized(chunk)) if chunk else ([], [])
+            pieces, ids, _ = self._model.encode_optimized(chunk)
             tokens.extend(pieces)
             token_ids.extend(ids)
 

@@ -1,25 +1,31 @@
-import os
+import os, sys
 from datasets import load_dataset
 from minunigram import train_unigram_model
 
-def main():
+def main(dataset_name="eng_latn_300mb", vocab_size=8000):
     # Load the dataset
-    print("\033[1;34m📚 Loading English dataset...\033[0m")
-    corpus_name = "eng_latn_300mb"
-    dataset = load_dataset(
-        "sanderland/monolingual-tokenizer-data",
-        data_files=[f"{corpus_name}.txt"],
-        split="train",
-        streaming=True,
-    )
     print("  🔄 Processing dataset...")
-    texts = [text for item in dataset for text in item['text'].split('\n') if text.strip()]
-    del dataset
+    if dataset_name == "eng_latn_300mb":
+        print("\033[1;34m📚 Loading English dataset...\033[0m")
+        corpus_name = "eng_latn_300mb"
+        dataset = load_dataset(
+            "sanderland/monolingual-tokenizer-data",
+            data_files=[f"{corpus_name}.txt"],
+            split="train",
+            streaming=True,
+        )
+        texts = [text for item in dataset for text in item['text'].split('\n') if text.strip()]
+        del dataset
+    elif dataset_name == "swift":
+        print("Loading taylor swift wiki page")
+        with open('../script_bpe/tests/data/taylorswift.txt', 'r', encoding='utf-8') as f:
+            texts = [f.read()]
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
     print(f"  ✨ Successfully loaded dataset")
     
     # Train tokenizer
     print("\n\033[1;32m🎯 Training Unigram Tokenizer\033[0m")
-    vocab_size = 8000  # Common vocabulary size for English
     tokenizer = train_unigram_model(
         corpus=texts,
         vocab_size=vocab_size,
@@ -53,15 +59,29 @@ def main():
     print(f"  💾 Total bytes processed: \033[1m{total_bytes:,}\033[0m")
     print(f"  🔤 Total tokens generated: \033[1m{total_tokens:,}\033[0m")
     print(f"  📝 Total characters: \033[1m{total_chars:,}\033[0m")
+
+    # Print stats on token lengths in vocab
+    print("\n\033[1;34m🔢 Token Length Distribution in Vocabulary:\033[0m")
+    from collections import Counter
+    token_lengths = [len(token) for token in tokenizer.vocab]
+    length_counts = Counter(token_lengths)
+    for length in sorted(length_counts):
+        print(f"  Length {length}: \033[1m{length_counts[length]:,}\033[0m tokens")
+        # Print first 100 examples of this length
+        examples = [token for token in tokenizer.vocab if len(token) == length][:100]
+        if examples:
+            print(f"    Examples: {', '.join(repr(e) for e in examples)}")
+
     print("\n\033[1;32m🎯 Efficiency Metrics:\033[0m")
-    print(f"  ⚡ Bytes per token: \033[1m{bytes_per_token:.2f}\033[0m")
-    print(f"  📏 Characters per token: \033[1m{chars_per_token:.2f}\033[0m")
+    print(f"  ⚡ Bytes per token: \033[1m{bytes_per_token:.4f}\033[0m")
+    print(f"  📏 Characters per token: \033[1m{chars_per_token:.4f}\033[0m")
     
     # Save the tokenizer
     print("\n\033[1;35m💾 Saving Tokenizer Model\033[0m")
     os.makedirs("models", exist_ok=True)
-    tokenizer.save("models/eng_unigram_8k.json")
-    print("\033[1;32m✨ Done! Tokenizer saved to models/eng_unigram_8k.json\033[0m")
+    outfile = f"models/{dataset_name}_{vocab_size}.json"
+    tokenizer.save(outfile)
+    print(f"\033[1;32m✨ Done! Tokenizer saved to {outfile}\033[0m")
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1], int(sys.argv[2]))

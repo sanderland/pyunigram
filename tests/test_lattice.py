@@ -4,18 +4,18 @@ def test_lattice_empty_and_unicode():
     # Empty string
     lattice = Lattice("")
     assert lattice.size == 0
-    assert lattice.sentence == ""
+    assert lattice.text == ""
     # Unicode string
     s = "テストab"
     lattice = Lattice(s)
     assert lattice.size == len(s)
-    assert lattice.sentence == s
+    assert lattice.text == s
     # Surfaces
-    assert lattice.sentence[0:] == s
-    assert lattice.sentence[1:] == s[1:]
-    assert lattice.sentence[2:] == s[2:]
-    assert lattice.sentence[3:] == s[3:]
-    assert lattice.sentence[4:] == s[4:]
+    assert lattice.text[0:] == s
+    assert lattice.text[1:] == s[1:]
+    assert lattice.text[2:] == s[2:]
+    assert lattice.text[3:] == s[3:]
+    assert lattice.text[4:] == s[4:]
 
 def test_lattice_insert_and_viterbi():
     lattice = Lattice("ABあい")

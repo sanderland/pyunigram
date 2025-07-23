@@ -44,7 +44,7 @@ class InternalModel:
 
     def populate_nodes(self, lattice: 'Lattice'):
         for i in range(lattice.size):
-            substring = lattice.sentence[i:]
+            substring = lattice.text[i:]
             matches = self.trie.common_prefix_search(substring)
             for piece, vocab_id in matches:
                 score = self.scores[vocab_id]
@@ -63,35 +63,34 @@ class InternalModel:
         nodes, _ = lattice.viterbi()
         return [(node['piece'], node['id']) for node in nodes]
     
-    def encode_optimized(self, normalized: str) -> list[tuple[str, int]]:
-        if not normalized:
-            return []
+    def encode_optimized(self, normalized: str) -> tuple[list[str], list[int], float]:
+        if not normalized: return [], [], 0.0
         size = len(normalized)
         ends_at = [{'starts_at': -1, 'id': -1, 'score': -float('inf')} for _ in range(size + 1)]
         ends_at[0] = {'starts_at': 0, 'id': 0, 'score': 0.0}
         
         for i in range(size):
-            if ends_at[i]['score'] == -float('inf'):
-                continue
+            if ends_at[i]['score'] == -float('inf'): continue
             substring = normalized[i:]
             matches = self.trie.common_prefix_search(substring)
-            has_single_char = any(len(p) == 1 for p, _ in matches)
-            if not has_single_char and substring:
-                matches.append((substring[0], self.unk_id))
-            
+            if not any(len(p) == 1 for p, _ in matches) and substring:
+                matches.append((substring[0], self.unk_token_str if isinstance(next(iter(self.scores), ''), str) else self.unk_id))
+
             for piece, vocab_id in matches:
-                end_pos = i + len(piece)
-                if end_pos > size:
-                    continue
                 score = self.scores.get(vocab_id, self.unk_score)
                 candidate_score = ends_at[i]['score'] + score
-                if candidate_score > ends_at[end_pos]['score']:
+                end_pos = i + len(piece)
+                if end_pos <= size and candidate_score > ends_at[end_pos]['score']:
                     ends_at[end_pos] = {'score': candidate_score, 'starts_at': i, 'id': vocab_id}
         
-        results, pos = [], size
+        pieces, ids, pos = [], [], size
         while pos > 0:
             node = ends_at[pos]
             start_pos = node['starts_at']
-            results.append((normalized[start_pos:pos], node['id']))
+            piece = normalized[start_pos:pos]
+            pieces.append(piece)
+            ids.append(node['id'] if node['id'] in self.scores else self.unk_id)
             pos = start_pos
-        return results[::-1]
+        
+        final_score = ends_at[size]['score']
+        return pieces[::-1], ids[::-1], final_score
