@@ -1,6 +1,6 @@
 
 # logs
-logs*.txt
+log*.txt
 dump.py
 
 # Python
