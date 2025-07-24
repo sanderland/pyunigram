@@ -1,8 +1,8 @@
 
 [project]
-name = "minunigram"
+name = "py_unigram"
 version = "0.1.0"
-description = "Minunigram project"
+description = "Python implementations of UnigramLM"
 readme = "README.md"
 authors = [
     { name = "Sander Land" },
@@ -10,6 +10,8 @@ authors = [
 requires-python = ">=3.10"
 dependencies = [
     "datasets>=2.15.0",
+    "numpy>=2.2.6",
+    "pyqt6>=6.9.1",
     "regex>=2024.11.6",
     "scipy>=1.15.3",
     "tqdm>=4.67.1",
