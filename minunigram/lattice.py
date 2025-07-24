@@ -1,5 +1,6 @@
 import math
 from collections import Counter
+import heapq
 
 
 def log_sum_exp(a, b):
@@ -52,7 +53,47 @@ class Lattice:
             node = node.get('prev')
         return path[::-1], final_score
 
+    def n_best(self, n: int) -> list[tuple[list[dict], float]]:
+        """
+        Finds the N-best segmentations using the A* search algorithm.
+        This is required for the faithful loss calculation in the trainer.
+        """
+        self.viterbi() # First, run Viterbi to get the heuristic scores.
+        
+        agenda = []
+        results = []
+        
+        eos_node = self.begin_nodes[self.size][0]
+        # Hypothesis: (fx, gx, node, path_stack)
+        # We use a unique id to break ties in the heap.
+        initial_hypothesis = (
+            -eos_node['backtrace_score'], # fx = gx + hx. gx=0, so fx=hx. Negative for max-heap.
+            0.0,                         # gx (score from EOS backward)
+            id(eos_node),                # Tie-breaker
+            eos_node,                    # Current node
+            []                           # Path constructed so far
+        )
+        heapq.heappush(agenda, initial_hypothesis)
 
+        while agenda and len(results) < n:
+            fx, gx, _, current_node, path = heapq.heappop(agenda)
+            
+            if current_node['piece'] == 'BOS':
+                results.append((path, gx))
+                continue
+
+            for prev_node in self.end_nodes[current_node['pos']]:
+                # New gx is the previous path's score + current node's score
+                new_gx = gx + current_node.get('score', 0.0)
+                # New fx = new_gx + h(prev_node)
+                new_fx = new_gx + prev_node.get('backtrace_score', 0.0)
+                
+                new_path = [current_node] + path
+                new_hypothesis = (-new_fx, new_gx, id(prev_node), prev_node, new_path)
+                heapq.heappush(agenda, new_hypothesis)
+                
+        return results
+    
     def _forward(self) -> list[float]:
         alpha = [-float('inf')] * len(self.nodes)
         alpha[self.end_nodes[0][0]['node_id']] = 0.0

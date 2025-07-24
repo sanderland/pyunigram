@@ -11,6 +11,8 @@ requires-python = ">=3.10"
 dependencies = [
     "datasets>=2.15.0",
     "regex>=2024.11.6",
+    "scipy>=1.15.3",
+    "tqdm>=4.67.1",
 ]
 
 [project.optional-dependencies]
