@@ -10,6 +10,7 @@ class Token:
     text: str
     id: int
     log_prob: float
+    locked: bool = False # if true, can not be removed
 
 class Trie:
     def __init__(self, tokens: list[Token]):
@@ -71,19 +72,19 @@ class Lattice:
         alpha(pos) = total prob of path to pos
         beta(pos) = total prob of path from pos to end
         """
-        alpha = [0] + [-float('inf')] * len(self.text)
-        beta = [-float('inf')] * (len(self.text) + 1)
+        alpha = [0] + [float('-inf')] * len(self.text)
+        beta = [float('-inf')] * (len(self.text)) + [0]
         for pos in range(len(self.text)):
             if alpha[pos] != float('-inf'):
                 for token in self.tokens_from_pos[pos]:
                     alpha[pos + len(token.text)] = logsumexp([alpha[pos + len(token.text)], alpha[pos] + token.log_prob])
         for pos in range(len(self.text)-1, -1, -1):
             for token in self.tokens_from_pos[pos]:
-                if beta[pos + len(token.text)] != -float('inf'):
+                if beta[pos + len(token.text)] != float('-inf'):
                     beta[pos] = logsumexp([beta[pos], beta[pos + len(token.text)] + token.log_prob])
         return alpha, beta
 
-    def marginal_probabilities(self):
+    def calc_marginal(self) -> tuple[float, dict[int, float]]:
         alpha, beta = self._forward_backward()
         z = alpha[-1]
         assert z != float('-inf'), "Lattice has no valid paths"
@@ -93,7 +94,7 @@ class Lattice:
                 token_logprob = alpha[pos] + token.log_prob + beta[pos + len(token.text)] - z
                 token_prob[token.id] = math.exp(max(-100, token_logprob))  # Avoid underflow
 
-        return token_prob
+        return z, token_prob
 
 
 

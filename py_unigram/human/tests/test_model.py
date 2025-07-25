@@ -62,18 +62,26 @@ def test_lattice_viterbi_empty():
     assert path == []
     assert score == float('-inf') or score == 0.0
 
-def test_lattice_marginal_probabilities(simple_lattice):
-    probs = simple_lattice.marginal_probabilities()
+def test_calc_marginal(simple_lattice):
+    z, probs = simple_lattice.calc_marginal()
     # All tokens should have probabilities between 0 and 1
     for v in probs.values():
         assert 0.0 <= v <= 1.0
-    # Should sum to ~1 (or less, if not all tokens are used)
-    assert sum(probs.values()) == pytest.approx(1.0, rel=1e-6)
+    assert sum(probs.values()) >= 1.0
+
+    # Check that path probabilities sum to z
+    total_path_prob = 0.0
+    for path, path_logprob in simple_lattice.all_paths():
+        total_path_prob += math.exp(path_logprob)
+    
+    assert math.isclose(math.exp(z), total_path_prob, rel_tol=1e-6)
+    
+
 
 # --- UnigramModel tests ---
 def test_unigram_model_tokenize(simple_model):
     # Should return viterbi path tokens
-    tokens = simple_model.tokenize("ab")
+    tokens = simple_model.encode("ab", return_tokens=True)
     assert [t.text for t in tokens] == ["ab"]
 
 @pytest.mark.parametrize("text,expected", [

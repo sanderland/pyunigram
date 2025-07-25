@@ -1,13 +1,12 @@
-import heapq  # For BoundedPriorityQueue logic
+import heapq
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Dict, List, Tuple
 
 from scipy.special import digamma
 
-from .model import Lattice, Token
+from .model import Lattice, Token, UnigramModel
 
-# --- Core Training Functions ---
 
 def make_initial_vocab(
     pretokens: dict[str, int],
@@ -35,59 +34,35 @@ def make_initial_vocab(
     log_sum_scores = math.log(sum(score for score, _ in selected_tokens))
     return [Token(text,               i,              math.log(score) - log_sum_scores) for i, (score, text) in enumerate(selected_tokens)]
 
-
-
-def _to_log_prob(items: list[tuple[str, float]]) -> None:
-    """Converts frequencies/scores to log probabilities in-place. Mirrors C++ ToLogProb."""
-    if not items:
-        return
-    total_count = sum(freq for _, freq in items)
-    if total_count <= 0:
-        log_prob = math.log(1.0 / len(items)) if items else 0.0
-        for i in range(len(items)):
-            items[i] = (items[i][0], log_prob)
-        return
-    log_total = math.log(total_count)
-    for i in range(len(items)):
-        piece, freq = items[i]
-        if freq > 0:
-            items[i] = (piece, math.log(freq) - log_total)
-        else:
-            items[i] = (piece, -1e38)
-
 def run_e_step(
-    model: TrainerModel,
+    model: UnigramModel,
     pretokens: dict[str, int],
-    verbose: bool = False,
 ) -> tuple[list[float], float, int]:
-    """
-    Performs the Expectation step of the EM algorithm for Unigram.
-    """
-    piece_size = len(model)
-    expected = [0.0] * piece_size
-    total_obj = 0.0
-    total_tokens = 0
+    """Performs the Expectation step of the EM algorithm for Unigram."""
+    expected_count = defaultdict(float)
+    objective = total_tokens = 0
     total_pretoken_freq = sum(freq for _, freq in pretokens.items())
 
     if total_pretoken_freq == 0:
-        return expected, total_obj, total_tokens
+        return expected_count, total_obj, total_tokens
 
-    for pretoken_str, freq in pretokens.items():
-        lattice = Lattice(pretoken_str)
-        model.populate(lattice)
-        Z = lattice.populate_marginal(freq, expected)
-        if math.isnan(Z):
-            if verbose: print(f"      ⚠️ Warning: NaN likelihood for pretoken freq={freq}. Skipping.")
+    for pretoken, freq in pretokens.items():
+        lattice = model.make_lattice(pretoken)
+        z, token_prob = lattice.calc_marginal()
+        if math.isnan(z): # should not happen
+            print(f"      ⚠️ Warning: NaN likelihood for pretoken {pretoken} with freq={freq}.")
             continue
+        for token_id, prob in token_prob.items():
+            expected_count[token_id] += prob * freq
         viterbi_path, _ = lattice.viterbi()
         num_tokens_in_sentence = len(viterbi_path)
         total_tokens += num_tokens_in_sentence * freq
-        total_obj -= (Z * freq) / total_pretoken_freq
+        objective -= (z * freq) / total_pretoken_freq
 
-    return expected, total_obj, total_tokens
+    return expected_count, objective, total_tokens
 
 def run_m_step(
-    model: TrainerModel,
+    model: UnigramModel,
     expected_counts: list[float],
     dirichlet_alpha: float = 1.0,
     verbose: bool = False,
@@ -95,43 +70,28 @@ def run_m_step(
     """
     Performs the Maximization step of the EM algorithm for Unigram.
     """
-    current_pieces = model.pieces
-    if len(current_pieces) != len(expected_counts):
-        raise ValueError(f"Model pieces ({len(current_pieces)}) and expected counts ({len(expected_counts)}) size mismatch.")
+    current_tokens = model.tokens
 
     # Filter infrequent pieces (Bayesian/DP modification)
-    k_expected_frequency_threshold = 0.5
-    filtered_pieces_and_expected = [
-        (current_pieces[i], expected_counts[i])
-        for i in range(len(current_pieces))
-        if expected_counts[i] >= k_expected_frequency_threshold
+    k_expected_frequency_threshold = 0.5 # TODO: make configurable, relative to corpus size
+    filtered_tokens = [
+        t for t in current_tokens
+        if expected_counts[t.id] >= k_expected_frequency_threshold or t.locked
     ]
-    if len(filtered_pieces_and_expected) < len(current_pieces) and verbose:
-        removed_pieces = [(p, ec) for p, ec in zip(current_pieces, expected_counts, strict=False) if ec < k_expected_frequency_threshold]
-        print(f"    🔍 Filtering: {len(current_pieces) - len(filtered_pieces_and_expected)} pieces filtered out due to low expected frequency.")
-        for piece, ec in sorted(removed_pieces, key=lambda x: x[1]):
-            print(f"      - Removed piece: {piece[0]!r} with expected count {ec:.4f} and score {piece[1]:.2f}")
-    if not filtered_pieces_and_expected:
-        if verbose: print("    ⚠️ Warning: No pieces survived filtering in M-step. Returning empty list.")
-        return []
-
-    # Prepare data for VB update (Digamma)
-    pieces_for_update = [p for p, _ in filtered_pieces_and_expected]
-    freqs_for_update = [f for _, f in filtered_pieces_and_expected]
+    if len(filtered_tokens) < len(current_tokens) and verbose:
+        print(f"    🔍 Filtering: {len(current_tokens) - len(filtered_tokens)} tokens filtered out due to low expected frequency.")
 
     # Variational Bayes Update using Digamma
-    sum_freq_plus_alpha = sum(freqs_for_update) + len(freqs_for_update) * dirichlet_alpha
-    log_total = digamma(sum_freq_plus_alpha) if sum_freq_plus_alpha > 0 else float('-inf')
+    sum_freq_plus_alpha = sum(expected_counts[t.id] for t in filtered_tokens) + len(filtered_tokens) * dirichlet_alpha
+    log_total = digamma(sum_freq_plus_alpha)
     new_pieces = []
-    for i in range(len(pieces_for_update)):
-        piece_str, _ = pieces_for_update[i]
-        freq = freqs_for_update[i]
-        adjusted_freq = freq + dirichlet_alpha
-        if adjusted_freq > 0 and log_total != float('-inf'):
+    for t in filtered_tokens:
+        adjusted_freq = expected_counts[t.id] + dirichlet_alpha
+        if adjusted_freq > 0:
             new_score = digamma(adjusted_freq) - log_total
         else:
             new_score = -1e38
-        new_pieces.append((piece_str, new_score))
+        t.log_prob = new_score
 
     return new_pieces
 
@@ -271,45 +231,35 @@ def finalize_pieces(
 def train_unigram(
     pretokens: dict[str, int],
     vocab_size: int = 8000,
-    num_sub_iterations: int = 2,
-    dirichlet_alpha: float = 1.0,
-    pruning_shrinking_factor: float = 0.75,
+    max_token_len: int = 16,
     initial_vocab_factor: int = 4,
-    max_piece_len: int = 16,
+    pruning_shrinking_factor: float = 0.75,
+    dirichlet_alpha: float = 1.0,
     required_chars: list[str] | None = None,
-    meta_pieces: list[str] = None,
+    max_iterations: int = 100,
+    num_sub_iterations: int = 2,
     verbose: bool = False,
 ) -> list[tuple[str, float]]:
-    """
-    Trains a Unigram tokenizer model.
-    """
-    if meta_pieces is None:
-        meta_pieces = ["<unk>"]
-    if verbose: print("🚀 === Unigram Model Training Started ===")
+    """Trains a Unigram tokenizer model."""
     if not pretokens:
-
         raise ValueError("Input 'pretokens' dictionary cannot be empty.")
+    
+    # initialize vocab and model
     required_chars = set(required_chars or [])
-    vocab = make_initial_vocab(pretokens, required_chars, vocab_size * initial_vocab_factor, max_piece_len)
-    if verbose: print(f"🌱 Generated {vocab_size} * {initial_vocab_factor} = {len(vocab)} initial tokens with max length {max_piece_len} from {len(pretokens)} pretokens")
+    vocab = make_initial_vocab(pretokens, required_chars, vocab_size * initial_vocab_factor, max_token_len)
+    if verbose:
+        print(f"🌱 Generated {vocab_size} * {initial_vocab_factor} = {len(vocab)} initial tokens with max length {max_token_len} from {len(pretokens)} pretokens")
+    model = UnigramModel(vocab)
 
-    # Phase 2: Initialize Model
-    seed_piece_strings_for_init = {piece: 1 for piece, _ in seed_pieces}
-    model = TrainerModel(seed_piece_strings_for_init, max_piece_length=max_piece_len)
-
-    # Phase 3: EM Training Loop
-    if verbose: print("\n🔁 Phase 2: EM Training Loop")
+    # EM Training Loop
     desired_vocab_size = int(vocab_size * 1.1)
-    if verbose: print(f"  🎯 Target intermediate vocab size: {desired_vocab_size}")
-    iteration = 0
-    while True:
-        if verbose: print(f"\n  🔁 EM Iteration {iteration + 1}")
+    for iter in range(max_iterations):
         # Sub-EM Iterations
         for sub_iter in range(num_sub_iterations):
-            if verbose: print(f"    🔄 Sub-iteration {sub_iter + 1}/{num_sub_iterations}")
-            expected_counts, obj, num_tokens = run_e_step(model, pretokens, verbose)
-            new_pieces = run_m_step(model, expected_counts, dirichlet_alpha, verbose)
-            model.set_pieces(new_pieces)
+            if verbose:
+                print(f"    🔄 EM Iteration {iter + 1}, Sub-iteration {sub_iter + 1}/{num_sub_iterations}")
+            expected_count, objective, total_tokens = run_e_step(model, pretokens, verbose)
+            run_m_step(model, expected_count, dirichlet_alpha, verbose)
             avg_tokens_per_piece = (1.0 * num_tokens / len(model)) if len(model) > 0 else 0
             if verbose:
                 print(f"      📈 Updated model. Size: {len(model)}, Obj: {obj:.6f}, Tokens: {num_tokens}, Avg Tokens/Piece: {avg_tokens_per_piece:.2f}")
