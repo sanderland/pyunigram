@@ -1,5 +1,6 @@
 from collections import Counter
 from collections.abc import Iterable
+
 import regex as re
 
 GPT2_PRE_TOKENIZER_REGEX = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""

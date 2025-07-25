@@ -1,9 +1,11 @@
 import json
-import regex as re
 from typing import List, Tuple, Union
 
-from .model import InternalModel
+import regex as re
+
 from py_unigram.gemini import train_unigram_model
+
+from .model import InternalModel
 
 
 class GeminiUnigramTokenizer:

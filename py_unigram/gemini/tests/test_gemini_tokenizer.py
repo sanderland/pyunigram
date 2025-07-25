@@ -1,6 +1,7 @@
 
 import pytest
-from py_unigram.gemini import train_unigram_model, UnigramTokenizer
+
+from py_unigram.gemini import UnigramTokenizer, train_unigram_model
 
 BASE_ALPHABET = list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ \t\n\r")
 
@@ -30,7 +31,7 @@ def test_save_and_load_consistency(tokenizer, tmp_file):
 
     assert tokenizer.vocab == loaded_tokenizer.vocab
     assert tokenizer.scores == loaded_tokenizer.scores
-    
+
     original_output = tokenizer.encode("abracadabra")
     loaded_output = loaded_tokenizer.encode("abracadabra")
     assert original_output == loaded_output
@@ -40,12 +41,12 @@ def test_encoding_logic(tokenizer):
     """Test the encoding logic on a known word."""
     # 'bra' is very common in the corpus, so it should be a single token
     token_ids, tokens = tokenizer.encode("abracadabra", return_tokens=True)
-    
+
     # Check if 'bra' is a token
     print(tokenizer.vocab)
 
     assert 'bra' in tokenizer.vocab
-    
+
     # Check if the encoding is what we expect
     assert tokens == ['a', 'bra', 'c', 'a', 'd', 'a', 'bra']
 
@@ -54,11 +55,11 @@ def test_pre_tokenization(tokenizer):
     """Test that pre-tokenization correctly splits text."""
     text = "hello world, test."
     _, tokens = tokenizer.encode(text, return_tokens=True)
-    
+
     # The output should preserve the input text exactly
     reconstructed = "".join(tokens)
     assert reconstructed == text
-    
+
 
 
 def test_unknown_token_handling(tokenizer):
@@ -87,7 +88,7 @@ def test_encode_return_tokens(tokenizer):
     # Check if we can decode the ids back to the original text
     assert tokenizer.decode(token_ids) == "abra"
     # Each id should correspond to its token
-    for token_id, token in zip(token_ids, tokens):
+    for token_id, token in zip(token_ids, tokens, strict=False):
         assert tokenizer.id_to_token[token_id] == token
 
 
@@ -95,11 +96,11 @@ def test_decode_edge_cases(tokenizer):
     """Test decoding with various edge cases."""
     # Test empty sequence
     assert tokenizer.decode([]) == ""
-    
+
     # Test unknown ids
     assert tokenizer.decode([-1]) == tokenizer.unk_token
     assert tokenizer.decode([999999]) == tokenizer.unk_token
-    
+
     # Test mixed known and unknown ids
     token_ids = tokenizer.encode("abra")
     mixed_ids = token_ids + [-1] + token_ids
@@ -119,7 +120,7 @@ def test_roundtrip_encoding(tokenizer):
         "\n\t",         # Whitespace characters
         "",             # Empty string
     ]
-    
+
     for text in test_cases:
         token_ids = tokenizer.encode(text)
         decoded = tokenizer.decode(token_ids)
@@ -129,12 +130,12 @@ def test_roundtrip_encoding(tokenizer):
 def test_consistent_encoding(tokenizer):
     """Test that encoding is consistent across multiple calls."""
     text = "test text with spaces and !@#$ punctuation"
-    
+
     # Multiple encode calls should give the same results
     result1 = tokenizer.encode(text)
     result2 = tokenizer.encode(text)
     assert result1 == result2
-    
+
     # With and without return_tokens should give consistent ids
-    ids_only = tokenizer.encode(text)
+    tokenizer.encode(text)
     ids_with_tokens, _ = tokenizer.encode(text, return_tokens=True)

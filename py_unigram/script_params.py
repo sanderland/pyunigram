@@ -1,6 +1,8 @@
 import sys
+
 import numpy as np
-from utils import load_texts, train_tokenizer, compute_compression_stats
+from utils import compute_compression_stats, load_texts, train_tokenizer
+
 
 def test_pruning_influence(dataset_name="eng_latn_300mb", vocab_size=8000, pruning_percentages=None, sample_size=1000):
     if pruning_percentages is None:

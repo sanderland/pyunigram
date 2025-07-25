@@ -1,9 +1,10 @@
 # tests/test_train.py
 import math
+
 import pytest
-from collections import Counter
-from py_unigram.qwen.train import train_unigram
+
 from py_unigram.pretokenize import pretokenize_corpus
+from py_unigram.qwen.train import train_unigram
 
 # --- Fixtures ---
 
@@ -106,7 +107,7 @@ class TestTrainUnigram:
         pieces2 = train_unigram(**kwargs)
 
         assert len(pieces1) == len(pieces2)
-        for p1, p2 in zip(pieces1, pieces2):
+        for p1, p2 in zip(pieces1, pieces2, strict=False):
             assert p1[0] == p2[0]
             assert p1[1] == pytest.approx(p2[1])
 

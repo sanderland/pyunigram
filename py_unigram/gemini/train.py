@@ -1,13 +1,14 @@
 import math
-import regex as re
 from collections import Counter
 from collections.abc import Iterable
-from scipy.special import digamma # Required for the faithful M-step
 
-from .model import InternalModel
+import regex as re
+from scipy.special import digamma  # Required for the faithful M-step
+
 from .lattice import Lattice
-from .tokenizer import GeminiUnigramTokenizer, GPT2_PRE_TOKENIZER_REGEX
-from .model import UNK_PENALTY
+from .model import InternalModel
+from .tokenizer import GPT2_PRE_TOKENIZER_REGEX, GeminiUnigramTokenizer
+
 
 def train_unigram_model(
     corpus: Iterable[str],
@@ -42,7 +43,7 @@ def train_unigram_model(
 
     seed_vocab_size = int(vocab_size * initial_vocab_size_factor)
     scores = {token: math.log(count) for token, count in substring_counts.most_common(seed_vocab_size)}
-    
+
     protected_tokens = set(required_chars or [])
     char_counts = Counter(c for pretoken in pretokens for c in pretoken)
     for char, count in char_counts.items():
@@ -50,13 +51,13 @@ def train_unigram_model(
         if char not in scores: scores[char] = math.log(count)
 
     if verbose: print(f"\n\033[1;32mPhase 2: Starting with {len(scores):,} seed tokens. Target: {vocab_size}\033[0m")
-    
+
     # --- MAIN TRAINING LOOP ---
     while len(scores) > vocab_size:
         # The E-M steps are run multiple times between each pruning step.
         for sub_iter in range(num_em_sub_iterations):
             if verbose: print(f"\n\033[1;35mEM Sub-Iteration {sub_iter + 1}/{num_em_sub_iterations} on {len(scores):,} tokens...\033[0m")
-            
+
             # E-Step: Calculate expected frequencies
             expected_counts = Counter()
             model = InternalModel(scores, unk_token=unk_token)
@@ -75,15 +76,15 @@ def train_unigram_model(
                 if verbose: print(f"  - No dead tokens to prune, lowest expected count is {min(expected_counts.values()):.2f}")
 
             # This is the Variational Bayes update rule.
-            # Bayesianified/DPified EM algorithm: https://cs.stanford.edu/~pliang/papers/tutorial-acl2007-talk.pdf            
+            # Bayesianified/DPified EM algorithm: https://cs.stanford.edu/~pliang/papers/tutorial-acl2007-talk.pdf
             total_expected_count = sum(expected_counts.values())
             log_total = digamma(total_expected_count + len(scores) * dirichlet_alpha)
             for token in scores:
                 scores[token] = digamma(expected_counts[token] + dirichlet_alpha) - log_total
-        
+
         # --- Pruning Step (after all sub-iterations are complete) ---
         if verbose: print(f"\n\033[1;36mCalculating loss to prune from {len(scores):,} to {vocab_size}...\033[0m")
-        
+
         prunable_tokens = [token for token in scores if token not in protected_tokens]
         if not prunable_tokens: break
 
@@ -102,21 +103,21 @@ def train_unigram_model(
 
         num_to_prune = max(1, min(len(scores) - vocab_size, int(len(scores) * pruning_percentage)))
         num_to_prune = min(num_to_prune, len(losses))
-        
+
         sorted_tokens_by_loss = sorted(losses.keys(), key=lambda k: losses[k])
-        
+
         if verbose: print(f"  - Pruning {num_to_prune} tokens with the lowest loss...")
-        
+
         for i in range(num_to_prune):
             if sorted_tokens_by_loss[i] in scores:
                 del scores[sorted_tokens_by_loss[i]]
 
-    if verbose: print(f"\n\033[1;32mPhase 3: Finalizing Vocabulary\033[0m")
-    
+    if verbose: print("\n\033[1;32mPhase 3: Finalizing Vocabulary\033[0m")
+
     # Finalize vocabulary and scores
     final_vocab = {unk_token: 0}
     final_scores = {0: -30.0}
-    
+
     next_id = 1
     for token in sorted(list(protected_tokens)):
         if token in scores:
@@ -136,5 +137,5 @@ def train_unigram_model(
         'pre_tokenizer_regex': pre_tokenizer_regex,
         'unk_token': unk_token,
     }
-    
+
     return UnigramTokenizer(config=tokenizer_data)

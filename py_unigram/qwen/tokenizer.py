@@ -1,8 +1,10 @@
 import json
 import os
-from typing import List, Tuple, Dict, Optional, Union
-from .train import train_unigram # Import the training function
-from .model import Lattice, TrainerModel # Import core model components
+from typing import Dict, List, Optional, Tuple, Union
+
+from .model import Lattice, TrainerModel  # Import core model components
+from .train import train_unigram  # Import the training function
+
 
 class QwenUnigramTokenizer:
     """
@@ -20,7 +22,7 @@ class QwenUnigramTokenizer:
         """
         if not tokens:
             raise ValueError("The 'tokens' list cannot be empty.")
-        
+
         self.tokens = tokens
         self.vocab = [piece for piece, _ in tokens]
         self.metadata = metadata if metadata is not None else {}
@@ -28,7 +30,7 @@ class QwenUnigramTokenizer:
         # --- Derived data for fast lookup ---
         # ID to token string mapping (ID is the index in the `tokens` list)
         self._id_to_token: List[str] = [piece for piece, _ in tokens]
-        
+
         # Token string to ID mapping
         self._token_to_id: Dict[str, int] = {piece: i for i, (piece, _) in enumerate(tokens)}
 
@@ -38,10 +40,10 @@ class QwenUnigramTokenizer:
         # segmentation logic in `populate` relies on the piece set and scores,
         # not the initial frequencies used during TrainerModel's own __init__ scoring.
         # The scores from `tokens` are used directly by the model after initialization.
-        
+
         # Create a dictionary of piece strings to dummy frequencies for initialization
         piece_strings_for_model_init = {piece: 1.0 for piece, _ in tokens}
-        
+
         # Assume max_piece_length was used during training or use a default.
         # It's crucial for Lattice.populate to work correctly.
         # Metadata could store this, or we assume it's implicit in the model.
@@ -49,10 +51,10 @@ class QwenUnigramTokenizer:
         # Inferring from the longest piece in the current vocab is a heuristic.
         max_piece_len_from_vocab = max((len(piece) for piece, _ in tokens), default=16)
         max_piece_length = self.metadata.get('training_params', {}).get('max_piece_len', max_piece_len_from_vocab)
-        
+
         # Initialize the TrainerModel instance for inference
         self.model = TrainerModel(piece_strings_for_model_init, max_piece_length=max_piece_length)
-        
+
         # Important: Overwrite the model's initial scores with the trained scores from `tokens`
         # This ensures the Viterbi algorithm uses the correct probabilities learned during training.
         self.model.set_pieces(tokens)
@@ -153,7 +155,7 @@ class QwenUnigramTokenizer:
         """
         # Ensure the directory exists
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        
+
         data = {
             "tokens": self.tokens, # List of [piece_string, score] lists
             "metadata": self.metadata
@@ -175,11 +177,11 @@ class QwenUnigramTokenizer:
         """
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
+
         # Ensure tokens are tuples
         tokens = [tuple(item) for item in data["tokens"]]
         metadata = data.get("metadata", {})
-        
+
         return cls(tokens, metadata)
 
     @classmethod
@@ -197,10 +199,10 @@ class QwenUnigramTokenizer:
         """
         # The training function returns the list of (piece_string, score) tuples
         tokens = train_unigram(**kwargs)
-        
+
         # Capture training parameters for metadata, excluding the main data input
         params = {k: v for k, v in kwargs.items() if k != 'pretokens'}
         metadata = {'training_params': params}
-        
+
         # Create and return a new tokenizer instance
         return cls(tokens, metadata)

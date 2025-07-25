@@ -1,8 +1,7 @@
 #%%
-import os
+import sentencepiece as spm
 from datasets import load_dataset
 from tokenizers import Tokenizer, models, pre_tokenizers, trainers
-import sentencepiece as spm
 from tqdm import tqdm
 
 # Load the wikitext dataset

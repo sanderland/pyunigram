@@ -1,6 +1,8 @@
 import math
+
 import pytest
-from py_unigram.qwen.model import Lattice, TrainerModel, Node
+
+from py_unigram.qwen.model import Lattice, Node, TrainerModel
 
 # --- Fixtures ---
 
@@ -197,7 +199,7 @@ class TestLattice:
         assert len(nbest_results) == 1
         # Need to compare node attributes as they are different objects
         assert len(nbest_results[0][0]) == len(viterbi_path)
-        for nbest_node, viterbi_node in zip(nbest_results[0][0], viterbi_path):
+        for nbest_node, viterbi_node in zip(nbest_results[0][0], viterbi_path, strict=False):
             assert nbest_node.pos == viterbi_node.pos
             assert nbest_node.length == viterbi_node.length
             assert nbest_node.piece_id == viterbi_node.piece_id

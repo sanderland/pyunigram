@@ -1,6 +1,8 @@
-import pytest
 import math
-from py_unigram.human.model import Token, Trie, Lattice, UnigramModel
+
+import pytest
+
+from py_unigram.human.model import Lattice, Token, Trie, UnigramModel
 
 # --- Fixtures ---
 

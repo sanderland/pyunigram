@@ -1,10 +1,12 @@
 import sys
-from utils import load_texts, train_tokenizer, compute_compression_stats, token_length_distribution, save_tokenizer
+
+from utils import compute_compression_stats, load_texts, save_tokenizer, token_length_distribution, train_tokenizer
+
 
 def main(dataset_name="eng_latn_300mb", vocab_size=8000):
     print("  🔄 Processing dataset...")
     texts = load_texts(dataset_name)
-    print(f"  ✨ Successfully loaded dataset")
+    print("  ✨ Successfully loaded dataset")
 
     print("\n\033[1;32m🎯 Training Unigram Tokenizer\033[0m")
     tokenizer = train_tokenizer(texts, vocab_size, verbose=True)

@@ -1,22 +1,33 @@
 # --- model.py_integration_gui.py ---
-import sys
 import math
-from collections import defaultdict
+import sys
+
+# --- PyQt6 Imports ---
+from PyQt6 import QtCore, QtGui
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QBrush, QColor, QPainter, QPen
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QGraphicsLineItem,
+    QGraphicsRectItem,
+    QGraphicsScene,
+    QGraphicsTextItem,
+    QGraphicsView,
+    QGroupBox,
+    QHBoxLayout,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 # --- Import the Lattice and TrainerModel classes ---
 # Ensure model.py is in the same directory or on the Python path
-from py_unigram.qwen.model import Lattice, TrainerModel, Node
-
-# --- PyQt6 Imports ---
-from PyQt6 import QtWidgets, QtCore, QtGui
-from PyQt6.QtCore import Qt, QRectF, QPointF
-from PyQt6.QtGui import QPainter, QPen, QBrush, QFont, QColor
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QPushButton,
-    QVBoxLayout, QHBoxLayout, QTextEdit, QMessageBox,
-    QGroupBox, QSplitter, QFrame, QGraphicsScene, QGraphicsView,
-    QGraphicsRectItem, QGraphicsTextItem, QGraphicsLineItem
-)
+from py_unigram.qwen.model import Lattice, Node, TrainerModel
 
 # --- GUI Logic ---
 
@@ -31,7 +42,7 @@ class LatticeNodeWidget(QGraphicsRectItem):
         self.selected_brush = QBrush(QColor("lightblue"))
         self.setBrush(self.initial_brush)
         self.setPen(QPen(Qt.GlobalColor.black, 1))
-        
+
         # Create text item as a child for easier positioning
         self.text_item = QGraphicsTextItem(parent=self)
         self.text_item.setDefaultTextColor(Qt.GlobalColor.black)
@@ -44,10 +55,8 @@ class LatticeNodeWidget(QGraphicsRectItem):
             piece_str = self.trainer_model[self.node.piece_id][0]
         except (IndexError, KeyError):
             piece_str = f"<unk:{self.node.piece_id}>"
-            
+
         gamma_text = f"γ:{self.node.gamma:.3f}" if hasattr(self.node, 'gamma') and self.node.gamma > 1e-6 else "γ:0.000"
-        alpha_text = f"α:{self.node.backtrace_score:.2f}" # Use backtrace_score as alpha proxy
-        beta_text = f"β:{self.node.beta_score:.2f}"
 
         self.text_item.setPlainText(
             f"'{piece_str}'\n"
@@ -125,11 +134,11 @@ class LatticeView(QGraphicsView):
                 for next_node in self.lattice.nodes[end_pos]:
                     end_widget = self.nodes_widgets.get(next_node)
                     if not end_widget: continue
-                    
+
                     # Arrow from bottom center of start to top center of end
                     start_point_scene = start_widget.mapToScene(start_widget.boundingRect().center().x(), start_widget.boundingRect().bottom())
                     end_point_scene = end_widget.mapToScene(end_widget.boundingRect().center().x(), end_widget.boundingRect().top())
-                    
+
                     arrow = QGraphicsLineItem(
                         start_point_scene.x(), start_point_scene.y(),
                         end_point_scene.x(), end_point_scene.y()
@@ -373,7 +382,7 @@ class ForwardBackwardVisualizer(QMainWindow):
         try:
             self.fb_model = SimpleUnigramFBModel(vocab_dict)
             self.fb_model.run_full_algorithm(sentence)
-            
+
             self.lattice_view.update_view(self.fb_model.lattice, self.fb_model.trainer_model)
             self.update_overall_results()
             self.detail_text.setPlainText("Click on a node in the lattice to see its details.")
@@ -400,7 +409,7 @@ class ForwardBackwardVisualizer(QMainWindow):
         # Sort by expected count descending
         if self.fb_model.trainer_model and self.fb_model.expected_counts:
             piece_scores = list(self.fb_model.trainer_model.pieces)
-            piece_data = list(zip(piece_scores, self.fb_model.expected_counts))
+            piece_data = list(zip(piece_scores, self.fb_model.expected_counts, strict=False))
             sorted_pieces = sorted(piece_data, key=lambda item: item[1], reverse=True)
             for (piece_str, _), exp_count in sorted_pieces:
                 if exp_count > 1e-6: # Only show significant ones
@@ -414,7 +423,7 @@ class ForwardBackwardVisualizer(QMainWindow):
         # Also show Viterbi path
         try:
             viterbi_path, viterbi_score = self.fb_model.lattice.viterbi()
-            result_text += f"\nViterbi Path (Best single segmentation):\n"
+            result_text += "\nViterbi Path (Best single segmentation):\n"
             if viterbi_path:
                 path_pieces = []
                 for node in viterbi_path:
@@ -463,7 +472,7 @@ class ForwardBackwardVisualizer(QMainWindow):
         else:
             detail += f"Beta (beta_score): {node.beta_score:.4f}\n"
 
-        detail += f"\n--- Marginal Probability (Gamma for THIS node) ---\n"
+        detail += "\n--- Marginal Probability (Gamma for THIS node) ---\n"
         detail += f"Gamma γ(node) = P(using '{piece_str}' at [{node.pos}-{node.pos + node.length}) | sentence)\n"
         if hasattr(node, 'gamma'):
             gamma_val = node.gamma
@@ -472,13 +481,13 @@ class ForwardBackwardVisualizer(QMainWindow):
             else:
                 detail += f"γ(node) = {gamma_val:.4f}\n"
         else:
-            detail += f"γ(node) = 0.0 (Not calculated)\n"
+            detail += "γ(node) = 0.0 (Not calculated)\n"
 
         if self.fb_model.expected_counts and node.piece_id < len(self.fb_model.expected_counts):
             total_gamma_for_piece = self.fb_model.expected_counts[node.piece_id]
             detail += f"\n--- Total Expected Count for Piece '{piece_str}' ---\n"
             detail += f"Sum of γ(node) over ALL nodes for '{piece_str}': {total_gamma_for_piece:.4f}\n"
-            detail += f"(This is what contributes to the piece's score update in the M-step.)\n"
+            detail += "(This is what contributes to the piece's score update in the M-step.)\n"
 
         self.detail_text.setPlainText(detail)
 
@@ -486,7 +495,7 @@ class ForwardBackwardVisualizer(QMainWindow):
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     # Set a default font for better readability
-    app.setFont(QtGui.QFont("Arial", 10)) 
+    app.setFont(QtGui.QFont("Arial", 10))
     window = ForwardBackwardVisualizer()
     window.show()
     sys.exit(app.exec())

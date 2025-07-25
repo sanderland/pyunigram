@@ -1,73 +1,41 @@
 import heapq  # For BoundedPriorityQueue logic
 import math
 from collections import Counter
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple
 
 from scipy.special import digamma
 
-from .model import Lattice, TrainerModel
+from .model import Lattice, Token
 
 # --- Core Training Functions ---
 
-def make_seed_pieces(
+def make_initial_vocab(
     pretokens: dict[str, int],
     required_chars: set[str],
-    vocab_size: int,
-    seed_size_factor: int = 4,
-    max_piece_len: int = 16,
-    max_pre_token_len: int | None = None,
-    verbose: bool = False,
-) -> list[tuple[str, float]]:
-    """
-    Generates the initial set of subword pieces (seed vocabulary).
-    Simplified version based on C++ MakeSeedSentencePiecesInternal logic.
-    """
-    if verbose: print(f"  🌱 Making seed pieces (vocab_size={vocab_size}, factor={seed_size_factor})")
-    seed_sentencepiece_size = vocab_size * seed_size_factor
+    num_tokens: int,
+    max_token_length: int = 16,
+) -> list[Token]:
 
-    # 1. Pretokenize (conceptually) and collect all characters
-    all_chars_freq = Counter()
-    for pretoken_str, freq in pretokens.items():
-        if max_pre_token_len and len(pretoken_str) > max_pre_token_len:
-            continue
-        for char in pretoken_str:
-            all_chars_freq[char] += freq
+    substring_freq = Counter()
+    for pretoken, freq in pretokens.items():
+        for i in range(len(pretoken)): # SentencePiece uses suffix array, this is simpler but more mem intensive
+            for j in range(i + 1, min(len(pretoken) + 1, i + max_token_length + 1)):
+                substring_freq[pretoken[i:j]] += freq
 
-    # 2. Ensure required chars are in seed
-    seed_pieces_dict = {char: freq for char, freq in all_chars_freq.items() if char in required_chars}
-    if verbose: print(f"    🧮 Collected {len(all_chars_freq)} unique chars, {len(seed_pieces_dict)} required chars for seed.")
+    for char in required_chars:
+        substring_freq[char] = max(substring_freq.get(char, 0), 1)  # Ensure required chars are always included
+    all_tokens = [ (freq * len(piece), piece) for piece, freq in substring_freq.items()]
 
-    # 3. Extract frequent substrings (Simplified)
-    if verbose: print(f"    🔍 Extracting frequent substrings (simplified, max_piece_len={max_piece_len})...")
-    all_substrings_freq = Counter()
-    for pretoken_str, freq in pretokens.items():
-        if max_pre_token_len and len(pretoken_str) > max_pre_token_len:
-            continue
-        for i in range(len(pretoken_str)):
-            for j in range(i + 1, min(len(pretoken_str) + 1, i + max_piece_len + 1)):
-                substr = pretoken_str[i:j]
-                if substr not in seed_pieces_dict:
-                    all_substrings_freq[substr] += freq
-    if verbose: print(f"    📦 Found {len(all_substrings_freq)} unique substrings.")
-
-    # 4. Select top seed_sentencepiece_size candidates based on score (freq * length)
-    if verbose: print(f"    🏆 Selecting top {seed_sentencepiece_size} seed pieces...")
-    top_substrings = heapq.nlargest(
-        seed_sentencepiece_size,
-        all_substrings_freq.items(),
-        key=lambda item: item[1] * len(item[0]) # freq * len (character coverage score)
+    # force length 1 tokens to be included
+    selected_tokens = heapq.nlargest(
+        num_tokens,
+        all_tokens,
+        key=lambda item: (item[0] + 1e15 * (len(item[1])==1), item[1])
     )
+    log_sum_scores = math.log(sum(score for score, _ in selected_tokens))
+    return [Token(text,               i,              math.log(score) - log_sum_scores) for i, (score, text) in enumerate(selected_tokens)]
 
-    # Add selected substrings to seed
-    for piece_str, freq in top_substrings:
-        seed_pieces_dict[piece_str] = freq * len(piece_str)
 
-    # 5. Convert frequencies/scores to log probabilities
-    if verbose: print("    📊 Converting scores to log probabilities...")
-    seed_pieces_list = list(seed_pieces_dict.items())
-    _to_log_prob(seed_pieces_list)
-    if verbose: print(f"    ✅ Finalized {len(seed_pieces_list)} seed pieces.")
-    return seed_pieces_list
 
 def _to_log_prob(items: list[tuple[str, float]]) -> None:
     """Converts frequencies/scores to log probabilities in-place. Mirrors C++ ToLogProb."""
@@ -306,9 +274,8 @@ def train_unigram(
     num_sub_iterations: int = 2,
     dirichlet_alpha: float = 1.0,
     pruning_shrinking_factor: float = 0.75,
-    seed_size_factor: int = 4,
+    initial_vocab_factor: int = 4,
     max_piece_len: int = 16,
-    max_pre_token_len: int | None = None,
     required_chars: list[str] | None = None,
     meta_pieces: list[str] = None,
     verbose: bool = False,
@@ -318,27 +285,13 @@ def train_unigram(
     """
     if meta_pieces is None:
         meta_pieces = ["<unk>"]
-    if verbose: print("\n🚀 === Unigram Model Training Started ===")
+    if verbose: print("🚀 === Unigram Model Training Started ===")
     if not pretokens:
+
         raise ValueError("Input 'pretokens' dictionary cannot be empty.")
-    if required_chars is None:
-        required_chars_set: Set[str] = set()
-    else:
-        required_chars_set: Set[str] = set(required_chars)
-
-    # Add characters from pretokens to required_chars_set implicitly
-    required_chars_set |= {char for pretoken_str in pretokens for char in pretoken_str}
-    if verbose:
-        print(f"  📊 Total unique pretokens: {len(pretokens)}")
-        print(f"  🔤 Total required characters (including from data): {len(required_chars_set)}")
-
-    # Phase 1: Seeding
-    if verbose: print("\n🌱 Phase 1: Generating Seed Vocabulary")
-    seed_pieces = make_seed_pieces(
-        pretokens, required_chars_set, vocab_size, seed_size_factor,
-        max_piece_len, max_pre_token_len, verbose
-    )
-    if verbose: print(f"  ✅ Generated {len(seed_pieces)} seed pieces.")
+    required_chars = set(required_chars or [])
+    vocab = make_initial_vocab(pretokens, required_chars, vocab_size * initial_vocab_factor, max_piece_len)
+    if verbose: print(f"🌱 Generated {vocab_size} * {initial_vocab_factor} = {len(vocab)} initial tokens with max length {max_piece_len} from {len(pretokens)} pretokens")
 
     # Phase 2: Initialize Model
     seed_piece_strings_for_init = {piece: 1 for piece, _ in seed_pieces}

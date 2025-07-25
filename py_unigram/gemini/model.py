@@ -1,6 +1,6 @@
+import heapq
 import math
 from collections import Counter
-import heapq
 
 
 def log_sum_exp(a, b):
@@ -44,7 +44,7 @@ class Lattice:
                     if score > best_score:
                         best_score, best_node = score, lnode
                 rnode['backtrace_score'], rnode['prev'] = best_score, best_node
-        
+
         path, node = [], self.begin_nodes[self.size][0]
         final_score = node['backtrace_score']
         node = node.get('prev')
@@ -59,10 +59,10 @@ class Lattice:
         This is required for the faithful loss calculation in the trainer.
         """
         self.viterbi() # First, run Viterbi to get the heuristic scores.
-        
+
         agenda = []
         results = []
-        
+
         eos_node = self.begin_nodes[self.size][0]
         # Hypothesis: (fx, gx, node, path_stack)
         # We use a unique id to break ties in the heap.
@@ -77,7 +77,7 @@ class Lattice:
 
         while agenda and len(results) < n:
             fx, gx, _, current_node, path = heapq.heappop(agenda)
-            
+
             if current_node['piece'] == 'BOS':
                 results.append((path, gx))
                 continue
@@ -87,13 +87,13 @@ class Lattice:
                 new_gx = gx + current_node.get('score', 0.0)
                 # New fx = new_gx + h(prev_node)
                 new_fx = new_gx + prev_node.get('backtrace_score', 0.0)
-                
+
                 new_path = [current_node] + path
                 new_hypothesis = (-new_fx, new_gx, id(prev_node), prev_node, new_path)
                 heapq.heappush(agenda, new_hypothesis)
-                
+
         return results
-    
+
     def _forward(self) -> list[float]:
         alpha = [-float('inf')] * len(self.nodes)
         alpha[self.end_nodes[0][0]['node_id']] = 0.0
@@ -145,10 +145,10 @@ class Lattice:
             for node in nodes:
                 # Skip special BOS/EOS nodes.
                 if node['id'] != -1:
-                    
+
                     # Standard textbook formula for the marginal probability of a state (node).
                     log_prob = alpha[node['node_id']] + beta[node['node_id']] - z
-                    
+
                     # Convert log-prob to a regular probability, scale by the pretoken's `count`,
                     # and add it directly to the external Counter object.
                     expected_counts[node['id']] += math.exp(log_prob) * count
@@ -189,7 +189,7 @@ class InternalModel:
         self.scores = {int(k): v for k, v in scores.items()} if vocab else scores
         self.unk_id = unk_id
         self.unk_score = self.scores.get(self.unk_id, min(self.scores.values()) - UNK_PENALTY) if self.scores else -UNK_PENALTY
-        
+
         self.trie = Trie()
         if vocab:
             id_to_piece = {v: k for k, v in vocab.items()}
@@ -207,7 +207,7 @@ class InternalModel:
             for piece, vocab_id in matches:
                 score = self.scores[vocab_id]
                 lattice.insert(i, len(piece), vocab_id, score)
-            
+
             has_single_char = any(len(p) == 1 for p, _ in matches)
             if not has_single_char and substring:
                 # During training, the ID is the token string itself.
@@ -220,13 +220,13 @@ class InternalModel:
         self.populate_nodes(lattice)
         nodes, _ = lattice.viterbi()
         return [(node['piece'], node['id']) for node in nodes]
-    
+
     def encode_optimized(self, normalized: str) -> tuple[list[str], list[int], float]:
         if not normalized: return [], [], 0.0
         size = len(normalized)
         ends_at = [{'starts_at': -1, 'id': -1, 'score': -float('inf')} for _ in range(size + 1)]
         ends_at[0] = {'starts_at': 0, 'id': 0, 'score': 0.0}
-        
+
         for i in range(size):
             if ends_at[i]['score'] == -float('inf'): continue
             substring = normalized[i:]
@@ -240,7 +240,7 @@ class InternalModel:
                 end_pos = i + len(piece)
                 if end_pos <= size and candidate_score > ends_at[end_pos]['score']:
                     ends_at[end_pos] = {'score': candidate_score, 'starts_at': i, 'id': vocab_id}
-        
+
         pieces, ids, pos = [], [], size
         while pos > 0:
             node = ends_at[pos]
@@ -249,6 +249,6 @@ class InternalModel:
             pieces.append(piece)
             ids.append(node['id'] if node['id'] in self.scores else self.unk_id)
             pos = start_pos
-        
+
         final_score = ends_at[size]['score']
         return pieces[::-1], ids[::-1], final_score

@@ -1,7 +1,8 @@
 # model.py
 import math
-from typing import List, Tuple, Dict, Optional, Any
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
+
 
 @dataclass
 class Node:
@@ -43,16 +44,16 @@ class Lattice:
         self.chars: List[str] = list(sentence)
         # nodes[pos] contains all Node objects that start at character index 'pos'
         self.nodes: List[List[Node]] = [[] for _ in range(len(self.chars) + 1)]
-        
+
         # --- Caching for Computed Results ---
         # Viterbi Path: The single most likely segmentation.
         self._viterbi_path: Optional[List[Node]] = None
         self._viterbi_score: Optional[float] = None
-        
+
         # N-Best Paths: The top-N most likely segmentations.
         self._nbest_cache_n = 0
         self._nbest_cache_results: List[Tuple[List[Node], float]] = []
-        
+
         # Forward/Backward variables for EM (PopulateMarginal).
         self.alpha: List[float] = [] # Forward log probabilities
         self.beta: List[float] = []  # Backward log probabilities
@@ -91,7 +92,7 @@ class Lattice:
         Caches the results for Viterbi and N-best.
         """
         if self._viterbi_path is not None: # Already computed
-            return 
+            return
 
         sentence_len = len(self.chars)
 
@@ -140,7 +141,7 @@ class Lattice:
                         best_final_node = node
 
         self._viterbi_score = best_final_score if best_final_node else float('-inf')
-        
+
         # Backtrace to construct the Viterbi path
         self._viterbi_path = []
         current_node = best_final_node
@@ -183,11 +184,11 @@ class Lattice:
                     # Score of path: (current node) -> (next node) -> (best path from next node to end)
                     # This is the sum of the current edge score and the best score from the next node.
                     candidate_beta = node.log_prob + next_node.beta_score
-                    
+
                     if candidate_beta > best_beta_score:
                         best_beta_score = candidate_beta
                         best_next_node = next_node
-                
+
                 # Update the node's beta_score and suffix_next pointer if a better path was found.
                 if best_beta_score != float('-inf'):
                     node.beta_score = best_beta_score
@@ -263,14 +264,14 @@ class Lattice:
 
 
         # --- Compute and Accumulate Marginals ---
-        # P(node is used in segmentation) = 
+        # P(node is used in segmentation) =
         # exp(alpha[pos] + node.log_prob + beta[end_pos] - Z)
         for pos in range(sentence_len):
             for node in self.nodes[pos]:
                 end_pos = pos + node.length
                 log_prob = self.alpha[pos] + node.log_prob + self.beta[end_pos] - Z
                 # Clamp log_prob to prevent underflow if it's extremely negative
-                if log_prob < -100: 
+                if log_prob < -100:
                     prob = 0.0
                 else:
                     prob = math.exp(log_prob)
@@ -301,7 +302,7 @@ class Lattice:
 
         results: List[Tuple[List[Node], float]] = []
         viterbi_path = self._viterbi_path if self._viterbi_path is not None else []
-        
+
         if not viterbi_path: # No path found
             self._nbest_cache_results = results
             self._nbest_cache_n = len(results)
@@ -323,7 +324,7 @@ class Lattice:
 
             # Iterate through each node in the Viterbi path
             for k in range(len(viterbi_path)):
-                node_k = viterbi_path[k] 
+                node_k = viterbi_path[k]
                 # Score of the path up to (but not including) node_k
                 prev_node_k_score = viterbi_path[k-1].backtrace_score if k > 0 else 0.0
 
@@ -334,7 +335,7 @@ class Lattice:
 
                     # Calculate the score of the path that deviates here:
                     # (Prefix up to node_k) + (Alternative node) + (Best suffix from alt_node)
-                    # This is equivalent to: 
+                    # This is equivalent to:
                     # (Score of best prefix to node_k's start) + (Score of best path from alt_node to end)
                     # Which is: prev_node_k_score + alt_node.beta_score
                     # The deviation_score (alt_node.log_prob) is included in alt_node.beta_score.
@@ -344,14 +345,14 @@ class Lattice:
 
                     # Check if the suffix from alt_node is valid
                     if suffix_score != float('-inf'):
-                        # The nbest candidate score is the sum of the prefix score and the best 
+                        # The nbest candidate score is the sum of the prefix score and the best
                         # score achievable from the alternative node onwards.
                         candidate_score = prefix_score + suffix_score
 
                         # Use >= to ensure we consider later candidates in case of ties,
                         # which might be necessary for correct tie-breaking or finding the
                         # expected path in tests.
-                        if candidate_score >= second_best_score: 
+                        if candidate_score >= second_best_score:
                             second_best_score = candidate_score
                             # --- Correctly Reconstruct the 2nd best path ---
                             # 1. Take the prefix path up to the deviation point (before node_k)
@@ -361,7 +362,7 @@ class Lattice:
                             #    as its first element.
                             suffix_path = []
                             current_suffix_node = alt_node
-                            while current_suffix_node: 
+                            while current_suffix_node:
                                 suffix_path.append(current_suffix_node)
                                 current_suffix_node = current_suffix_node.suffix_next
 
@@ -373,7 +374,7 @@ class Lattice:
             # If a 2nd best path was found, add it to the results
             if second_best_path is not None:
                 # Recalculate the *actual* log probability score of the reconstructed path
-                # to ensure correctness, as the nbest_score used for ranking might have 
+                # to ensure correctness, as the nbest_score used for ranking might have
                 # been derived differently (though in this implementation it should be the same).
                 actual_second_best_score = sum(node.log_prob for node in second_best_path)
                 results.append((second_best_path, actual_second_best_score))
@@ -400,7 +401,7 @@ class TrainerModel:
         """
         if not pretokens:
             raise ValueError("Pretokens dictionary cannot be empty.")
-            
+
         # Convert input frequencies to initial log probabilities
         total_freq = sum(pretokens.values())
         if total_freq <= 0:
@@ -411,17 +412,17 @@ class TrainerModel:
             log_total_freq = math.log(total_freq)
             # Create list of (piece, log_probability) tuples
             self._pieces: List[Tuple[str, float]] = [
-                (piece, math.log(freq) - log_total_freq) 
-                for piece, freq in pretokens.items() 
+                (piece, math.log(freq) - log_total_freq)
+                for piece, freq in pretokens.items()
                 if freq > 0 # Only include pieces with positive frequency
             ]
-        
+
         if not self._pieces:
              raise ValueError("No valid pieces found after processing pretokens.")
-             
+
         # The minimum score among all pieces, useful for finalization
         self.min_score = min((score for _, score in self._pieces), default=float('inf'))
-        
+
         # Build a Trie data structure for efficient prefix matching
         self._build_trie()
 
@@ -446,7 +447,7 @@ class TrainerModel:
                     node[char] = {} # Create a new node if the character path doesn't exist
                 node = node[char]
             # Mark the end of the piece with its index in self._pieces
-            node['piece_id'] = i 
+            node['piece_id'] = i
 
     def populate(self, lattice: Lattice) -> None:
         """
@@ -464,7 +465,7 @@ class TrainerModel:
             trie_node = self.trie
             current_pos = pos
             # Traverse the Trie while matching characters in the sentence
-            while (current_pos < len(sentence_str) and 
+            while (current_pos < len(sentence_str) and
                    sentence_str[current_pos] in trie_node):
                 trie_node = trie_node[sentence_str[current_pos]]
                 current_pos += 1

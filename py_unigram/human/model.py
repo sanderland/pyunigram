@@ -1,8 +1,9 @@
-from dataclasses import dataclass
-from collections.abc import Iterable
 import math
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 from scipy.special import logsumexp
+
 
 @dataclass
 class Token:
@@ -64,7 +65,7 @@ class Lattice:
         for token in self.tokens_from_pos[starting_pos]:
             for sub_path, sub_prob in self.all_paths(starting_pos + len(token.text)):
                 yield ( (token,) + sub_path, sub_prob + token.log_prob)
-                
+
     def _forward_backward(self) -> tuple[list[float], list[float]]:
         """returns
         alpha(pos) = total prob of path to pos
@@ -91,14 +92,8 @@ class Lattice:
             for token in self.tokens_from_pos[pos]:
                 token_logprob = alpha[pos] + token.log_prob + beta[pos + len(token.text)] - z
                 token_prob[token.id] = math.exp(max(-100, token_logprob))  # Avoid underflow
-                
+
         return token_prob
-
-
-
-
-
-
 
 
 
@@ -108,14 +103,20 @@ class UnigramModel:
 
     def __init__(self, tokens: list[Token]):
         self.tokens = tokens # str -> logprob
+        self.tokens_by_id = {token.id: token for token in tokens}
         self.trie = Trie(self.tokens)
 
     def make_lattice(self, text: str) -> Lattice:
         tokens_from_pos = [self.trie.find_prefixes(text[i:]) for i in range(len(text))]
         return Lattice(text, tokens_from_pos)
 
-    def tokenize(self, text: str) -> list[Token]:
+    def encode(self, text: str, return_tokens=False) -> list[Token] | list[int]:
         lattice = self.make_lattice(text)
-        return lattice.viterbi()[0]
+        tokens = lattice.viterbi()[0]
+        if return_tokens:
+            return tokens
+        else:
+            return [token.id for token in tokens]
 
-
+    def decode(self, ids: list[int]) -> str:
+        return ''.join(self.tokens_by_id[id].text for id in ids)

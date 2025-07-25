@@ -42,14 +42,14 @@ def print_directory_structure(start_path: str, exclusion_patterns: Set[str]) -> 
             rel_path = os.path.relpath(os.path.join(dir_path, entry), start_path)
             if is_excluded(rel_path, exclusion_patterns):
                 continue
-            
+
             if i == len(entries) - 1:
                 connector = '└── '
                 new_prefix = prefix + '    '
             else:
                 connector = '├── '
                 new_prefix = prefix + '│   '
-            
+
             full_path = os.path.join(dir_path, entry)
             if os.path.isdir(full_path):
                 tree.append(f"{prefix}{connector}{entry}/")
@@ -71,23 +71,23 @@ def scan_folder(start_path: str, file_types: Optional[List[str]], output_file: s
         out_file.write("File Contents:\n")
         out_file.write("--------------\n")
 
-        for root, dirs, files in os.walk(start_path):
+        for root, _dirs, files in os.walk(start_path):
             rel_path = os.path.relpath(root, start_path)
-            
+
             if is_excluded(rel_path, exclusion_patterns):
                 continue
-            
+
             for file in files:
                 file_rel_path = os.path.join(rel_path, file)
                 if is_excluded(file_rel_path, exclusion_patterns):
                     continue
                 if file_types is None or any(file.endswith(ext) for ext in file_types):
                     file_path = os.path.join(root, file)
-                    
+
                     print(f"Processing: {file_rel_path}")
                     out_file.write(f"File: {file_rel_path}\n")
                     out_file.write("-" * 50 + "\n")
-                    
+
                     try:
                         with open(file_path, 'r', encoding='utf-8') as in_file:
                             content = in_file.read()
@@ -95,7 +95,7 @@ def scan_folder(start_path: str, file_types: Optional[List[str]], output_file: s
                     except Exception as e:
                         print(f"Error reading file {file_rel_path}: {str(e)}. Skipping.")
                         out_file.write(f"Error reading file: {str(e)}. Content skipped.\n")
-                    
+
                     out_file.write("\n\n")
 
 def main(args: List[str]) -> None:

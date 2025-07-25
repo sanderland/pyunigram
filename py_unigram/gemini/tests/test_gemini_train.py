@@ -1,5 +1,6 @@
 from py_unigram.gemini import train_unigram_model
 
+
 def test_train_small_vocab():
     corpus = ["abc", "bcd", "cde"]
     # vocab_size < unique chars, should still include <unk> and base chars
