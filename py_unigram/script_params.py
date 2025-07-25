@@ -12,7 +12,7 @@ def test_pruning_influence(dataset_name="eng_latn_300mb", vocab_size=8000, pruni
         print(f"\n\033[1;32mTesting pruning_percentage={pruning:.3f}\033[0m")
         tokenizer = train_tokenizer(
             texts, vocab_size,
-            pruning_percentage=pruning,
+            pruning_shrinking_factor=1-pruning,
             verbose=(i==0)  # Only verbose for the first iteration,
         )
         stats = compute_compression_stats(tokenizer, eval_texts)

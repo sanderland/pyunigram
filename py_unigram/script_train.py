@@ -15,7 +15,7 @@ def main(dataset_name="eng_latn_300mb", vocab_size=8000):
     stats = compute_compression_stats(tokenizer, eval_texts)
 
     print("\n\033[1;33m📈 Tokenization Statistics:\033[0m")
-    print(f"  📦 Vocabulary size: \033[1m{len(tokenizer.vocab):,}\033[0m tokens")
+    print(f"  📦 Vocabulary size: \033[1m{len(tokenizer):,}\033[0m tokens")
     print(f"  💾 Total bytes processed: \033[1m{stats['total_bytes']:,}\033[0m")
     print(f"  🔤 Total tokens generated: \033[1m{stats['total_tokens']:,}\033[0m")
     print(f"  📝 Total characters: \033[1m{stats['total_chars']:,}\033[0m")

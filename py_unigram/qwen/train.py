@@ -136,6 +136,11 @@ def run_m_step(
         for i in range(len(current_pieces))
         if expected_counts[i] >= k_expected_frequency_threshold
     ]
+    if len(filtered_pieces_and_expected) < len(current_pieces) and verbose:
+        removed_pieces = [(p, ec) for p, ec in zip(current_pieces, expected_counts) if ec < k_expected_frequency_threshold]
+        print(f"    🔍 Filtering: {len(current_pieces) - len(filtered_pieces_and_expected)} pieces filtered out due to low expected frequency.")
+        for piece, ec in sorted(removed_pieces, key=lambda x: x[1]):
+            print(f"      - Removed piece: {piece[0]!r} with expected count {ec:.4f} and score {piece[1]:.2f}")
     if not filtered_pieces_and_expected:
         if verbose: print("    ⚠️ Warning: No pieces survived filtering in M-step. Returning empty list.")
         return []
@@ -190,8 +195,8 @@ def prune_pieces(
                 always_keep[i] = False
             elif len(path1_nodes) == 1:
                 always_keep[i] = True
-                _, path2_nodes_and_scores = nbest_paths_and_scores[1] if len(nbest_paths_and_scores) > 1 else (None, [])
-                alternatives[i] = [node.piece_id for node in path2_nodes_and_scores]
+                path2_nodes_list, _ = nbest_paths_and_scores[1] if len(nbest_paths_and_scores) > 1 else ([], 0.0)
+                alternatives[i] = [node.piece_id for node in path2_nodes_list]
 
     # Phase 2: Calculate Viterbi frequencies for all pieces across pretokens
     freq = [0.0] * piece_size
@@ -316,16 +321,14 @@ def train_unigram(
         required_chars_set: Set[str] = set(required_chars)
 
     # Add characters from pretokens to required_chars_set implicitly
-    for pretoken_str in pretokens:
-        for char in pretoken_str:
-             required_chars_set.add(char)
+    required_chars_set |= {char for pretoken_str in pretokens for char in pretoken_str}
     if verbose:
         print(f"  📊 Total unique pretokens: {len(pretokens)}")
         print(f"  🔤 Total required characters (including from data): {len(required_chars_set)}")
 
     # Phase 1: Seeding
     if verbose: print("\n🌱 Phase 1: Generating Seed Vocabulary")
-    seed_pieces: List[Tuple[str, float]] = make_seed_pieces(
+    seed_pieces = make_seed_pieces(
         pretokens, required_chars_set, vocab_size, seed_size_factor,
         max_piece_len, max_pre_token_len, verbose
     )
@@ -362,7 +365,6 @@ def train_unigram(
         if verbose: print(f"    🔪 Pruning to shrink vocab towards {desired_vocab_size}...")
         pruned_pieces = prune_pieces(model, pretokens, vocab_size, pruning_shrinking_factor, verbose)
         model.set_pieces(pruned_pieces)
-        if verbose: print(f"    📉 Pruned vocabulary size: {len(model)}")
         iteration += 1
 
         # Safety break

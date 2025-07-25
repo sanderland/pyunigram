@@ -1,7 +1,8 @@
 import os
-from py_unigram.gemini import train_unigram_model
+from py_unigram.qwen.tokenizer import QwenUnigramTokenizer
 from collections import Counter
 from datasets import load_dataset
+from py_unigram.pretokenize import pretokenize_corpus
 
 def load_texts(dataset_name):
     """Load texts from the specified dataset."""
@@ -26,12 +27,13 @@ def load_texts(dataset_name):
 
 def train_tokenizer(texts, vocab_size, **kwargs):
     """Train a unigram tokenizer."""
-    tokens = train_unigram_model(
-        corpus=texts,
+    pretokens = pretokenize_corpus(texts)
+    return QwenUnigramTokenizer.train(
+        pretokens=pretokens,
         vocab_size=vocab_size,
         **kwargs,
     )
-    return UnigramTokenizer(tokens)
+
 
 def compute_compression_stats(tokenizer, texts):
     """Compute compression statistics for a tokenizer and texts."""

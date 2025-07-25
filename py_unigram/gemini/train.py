@@ -16,7 +16,7 @@ def train_unigram_model(
     unk_token: str = "<unk>",
     initial_vocab_size_factor: int = 4,
     max_piece_len: int = 16,
-    pruning_percentage: float = 0.25,
+    pruning_shrinking_factor: float = 0.75,
     num_em_sub_iterations: int = 2,
     dirichlet_alpha: float = 1.0,
     required_chars: list[str] = None,
@@ -25,6 +25,8 @@ def train_unigram_model(
     """
     A port of the SentencePiece Unigram model training logic, incorporating the VB/digamma M-step and sub-EM iterations.
     """
+    pruning_percentage: float = 1 - pruning_shrinking_factor
+
     if verbose: print("\033[1;36mPhase 1: Pre-tokenization and Substring Counting\033[0m")
 
     pretokenizer = re.compile(pre_tokenizer_regex)

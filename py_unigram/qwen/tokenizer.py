@@ -22,6 +22,7 @@ class QwenUnigramTokenizer:
             raise ValueError("The 'tokens' list cannot be empty.")
         
         self.tokens = tokens
+        self.vocab = [piece for piece, _ in tokens]
         self.metadata = metadata if metadata is not None else {}
 
         # --- Derived data for fast lookup ---

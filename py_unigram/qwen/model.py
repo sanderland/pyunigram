@@ -251,8 +251,6 @@ class Lattice:
         self.beta[sentence_len] = 0.0 # End state probability is 1 (log(1)=0)
         # Iterate backwards
         for pos in range(sentence_len, -1, -1):
-            if self.beta[pos] == float('-inf'):
-                continue # Unreachable position
             for node in self.nodes[pos]:
                 end_pos = pos + node.length
                 new_log_prob = self.beta[end_pos] + node.log_prob
@@ -262,6 +260,7 @@ class Lattice:
                 elif self.beta[pos] != float('-inf'):
                     diff = new_log_prob - self.beta[pos]
                     self.beta[pos] += math.log1p(math.exp(diff))
+
 
         # --- Compute and Accumulate Marginals ---
         # P(node is used in segmentation) = 
