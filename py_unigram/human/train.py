@@ -64,36 +64,34 @@ def run_e_step(
 def run_m_step(
     model: UnigramModel,
     expected_counts: list[float],
-    dirichlet_alpha: float = 1.0,
+    dp_smoothing: bool = True,
+    k_expected_frequency_threshold = 0.5, # TODO: scale with corpus size
     verbose: bool = False,
-) -> list[tuple[str, float]]:
+):
+    """Performs the Maximization step of the EM algorithm for Unigram.
+        expected_counts: Expected frequency for each token from E-step
+        dp_smoothing: If True, use digamma-based sparsity (like SentencePiece).
+                      If False, use standard maximum likelihood estimation.
     """
-    Performs the Maximization step of the EM algorithm for Unigram.
-    """
-    current_tokens = model.tokens
-
-    # Filter infrequent pieces (Bayesian/DP modification)
-    k_expected_frequency_threshold = 0.5 # TODO: make configurable, relative to corpus size
-    filtered_tokens = [
-        t for t in current_tokens
+    prev_tokens = model.tokens
+    # Filter infrequent pieces.
+    model.tokens = [
+        t for t in prev_tokens
         if expected_counts[t.id] >= k_expected_frequency_threshold or t.locked
     ]
-    if len(filtered_tokens) < len(current_tokens) and verbose:
-        print(f"    🔍 Filtering: {len(current_tokens) - len(filtered_tokens)} tokens filtered out due to low expected frequency.")
+    
+    if verbose:
+        print(f"    🔍 Filtering: {len(prev_tokens) - len(model.tokens)} tokens out due to < {k_expected_frequency_threshold} expected frequency.")
 
-    # Variational Bayes Update using Digamma
-    sum_freq_plus_alpha = sum(expected_counts[t.id] for t in filtered_tokens) + len(filtered_tokens) * dirichlet_alpha
-    log_total = digamma(sum_freq_plus_alpha)
-    new_pieces = []
-    for t in filtered_tokens:
-        adjusted_freq = expected_counts[t.id] + dirichlet_alpha
-        if adjusted_freq > 0:
-            new_score = digamma(adjusted_freq) - log_total
-        else:
-            new_score = -1e38
-        t.log_prob = new_score
+    total_freq = sum(expected_counts[t.id] for t in model.tokens)
+    if dp_smoothing: # SentencePiece-style: digamma transform with implicit alpha=0 for sparsity bias
+        log_total = digamma(total_freq)
+        for t in model.tokens:
+            t.log_prob = digamma(expected_counts[t.id]) - log_total
+    else: # Standard maximum likelihood estimation
+        for t in model.tokens:
+            t.log_prob = math.log(expected_counts[t.id] / total_freq)
 
-    return new_pieces
 
 def prune_pieces(
     model: TrainerModel,
