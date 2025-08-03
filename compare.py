@@ -7,6 +7,8 @@ from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from tqdm import tqdm
 from typing import Dict, List, Tuple, Optional
 import sys
+from py_unigram.pretokenize import pretokenize_corpus
+
 
 # Add the project root to Python path to enable local imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -30,14 +32,6 @@ def get_training_texts(dataset):
     """Get all training texts as a list of strings."""
     return [text for text in dataset["text"] if text.strip()]
 
-def get_pretokens(dataset) -> Dict[str, int]:
-    """Convert dataset into pretokens with frequencies."""
-    pretokens = {}
-    for text in dataset["text"]:
-        text = text.strip()
-        if text:
-            pretokens[text] = pretokens.get(text, 0) + 1
-    return pretokens
 
 def train_hf_tokenizer(dataset, texts, vocab_size=20000) -> TokenizerResult:
     """Train and test a Hugging Face Unigram tokenizer.
@@ -153,7 +147,7 @@ def train_human_tokenizer(dataset, texts, vocab_size=20000) -> TokenizerResult:
     print("\nTraining Human Unigram Tokenizer...")
     
     # Get pretokens (text chunks with frequencies)
-    pretokens = get_pretokens(dataset)
+    pretokens = pretokenize_corpus(dataset)
     print(f"Loaded {len(pretokens):,} unique pretokens, total {sum(pretokens.values()):,} pretokens")
     
     # Define required characters (all unique chars in the dataset)

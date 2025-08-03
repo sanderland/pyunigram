@@ -43,7 +43,7 @@ def run_e_step(
     total_pretoken_freq = sum(freq for _, freq in pretokens.items())
 
     if total_pretoken_freq == 0:
-        return expected_count, total_obj, total_tokens
+        return expected_count, objective, total_tokens
 
     for pretoken, freq in pretokens.items():
         lattice = model.make_lattice(pretoken)
@@ -62,34 +62,36 @@ def run_e_step(
 
 def run_m_step(
     model: UnigramModel,
-    expected_counts: list[float],
+    expected_count: dict[int, float],
     dp_smoothing: bool = True,
     k_expected_frequency_threshold = 0.5, # TODO: scale with corpus size
     verbose: bool = False,
-):
+) -> UnigramModel:
     """Performs the Maximization step of the EM algorithm for Unigram.
         expected_counts: Expected frequency for each token from E-step
         dp_smoothing: If True, use digamma-based sparsity (like SentencePiece).
                       If False, use standard maximum likelihood estimation.
     """
-    prev_tokens = model.tokens
     # Filter infrequent pieces.
-    model.tokens = [
-        t for t in prev_tokens
-        if expected_counts[t.id] >= k_expected_frequency_threshold or t.locked
+    filtered_tokens = [
+        t for t in model.tokens
+        if expected_count[t.id] >= k_expected_frequency_threshold or t.locked
     ]
-    
-    if verbose:
-        print(f"    🔍 Filtering: {len(prev_tokens) - len(model.tokens)} tokens out due to < {k_expected_frequency_threshold} expected frequency.")
 
-    total_freq = sum(expected_counts[t.id] for t in model.tokens)
+    if len(filtered_tokens) < len(model.tokens):
+        if verbose:
+            print(f"      🔍 Filtering: {len(model.tokens) - len(filtered_tokens)} tokens out due to < {k_expected_frequency_threshold} expected frequency.")
+        model = UnigramModel(filtered_tokens)
+
+    total_freq = sum(expected_count[t.id] for t in model.tokens)
     if dp_smoothing: # SentencePiece-style: digamma transform with implicit alpha=0 for sparsity bias
         log_total = digamma(total_freq)
         for t in model.tokens:
-            t.log_prob = digamma(expected_counts[t.id]) - log_total
+            t.log_prob = digamma(expected_count[t.id]) - log_total
     else: # Standard maximum likelihood estimation
         for t in model.tokens:
-            t.log_prob = math.log(expected_counts[t.id] / total_freq)
+            t.log_prob = math.log(expected_count[t.id] / total_freq)
+    return model
 
 def prune_tokens(
     model: UnigramModel,
@@ -97,7 +99,7 @@ def prune_tokens(
     vocab_size: int,
     shrinking_factor: float = 0.75,
     verbose: bool = False,
-) -> list[Token]:
+) -> UnigramModel:
     """
     Prunes tokens based on their importance to the model using Viterbi-based pruning.
     This is a Python port of the C++ PruneSentencePieces function from SentencePiece.
@@ -121,35 +123,35 @@ def prune_tokens(
         print(f"    ✂️  Pruning tokens using Viterbi-based pruning from {len(model.tokens)} to {target_size} tokens...")
     
     # Initialize data structures for tracking token pruning
-    always_keep = [True] * len(model.tokens)  # Whether each token must be kept
-    alternatives = [[] for _ in model.tokens]  # Alternative segmentations for each token
+    always_keep = {t.id: True for t in model.tokens}  # Whether each token must be kept TODO: THIS NAME IS CONFUSING AF
+    alternatives = {t.id: [] for t in model.tokens}  # Alternative segmentations for each token
 
     # First, segments the current tokens to know how each token is resegmented if removed
     # To do so, we take the second best segmentation of token[i].
     # alternatives[i] stores the sequence of second best tokens.
-    for i, token in enumerate(model.tokens):
+    for token in model.tokens:
         if token.locked:  # Skip locked tokens (must be kept)
-            always_keep[i] = True
+            always_keep[token.id] = True
             continue
             
         lattice = model.make_lattice(token.text)
         best_path, _ = lattice.viterbi(allow_single_token=True)
         
         if len(best_path) >= 2:  # Can safely remove this token if its Viterbi path is split
-            always_keep[i] = False
+            always_keep[token.id] = False
         else:  # Try to find alternative segmentation without single-token path
             alt_path, _ = lattice.viterbi(allow_single_token=False)
             if alt_path: # Found alternative segmentation
-                always_keep[i] = False
-                alternatives[i] = [t.id for t in alt_path]
+                always_keep[token.id] = True
+                alternatives[token.id] = [t.id for t in alt_path]
             else: # No alternative segmentation found, must keep
-                always_keep[i] = True
+                always_keep[token.id] = True
 
     # Second, segments all sentences to compute likelihood
     # with a unigram language model. inverted[i] stores
     # the set of sentence index where the tokens[i] appears.
-    token_count = [0.0] * len(model.tokens)
-    inverted = [[] for _ in model.tokens]
+    token_count = {t.id: 0.0 for t in model.tokens}
+    inverted = {t.id: [] for t in model.tokens}
     vsum = sum(pretokens.values())
 
     for pretoken, count in pretokens.items():
@@ -166,48 +168,51 @@ def prune_tokens(
 
     # Finally, computes how likely the LM likelihood is reduced if the token[i] is removed from the vocabulary.
     # Since the exact computation of loss is difficult, we compute the loss approximately by assuming that all
-    # token[i] in the sentences are replaced with alternatives[i] when token[i] is removed.
-    for i, token in enumerate(model.tokens):
-        if token_count[i] == 0 or not always_keep[i]:  # not found in Viterbi path. Can remove this entry safely.
+    # token[id] in the sentences are replaced with alternatives[i] when token[i] is removed.
+    for token in model.tokens:
+        if token_count[token.id] == 0 or not always_keep[token.id]:  # not found in Viterbi path. Can remove this entry safely.
             continue
-        elif not alternatives[i] or token.locked: # no alternatives. Keeps this entry.
+        elif not alternatives[token.id] or token.locked: # no alternatives. Keeps this entry.
             new_tokens.append(token)
         else:  
             # The logprob with the token[i] = log(count[i] / total_count)
-            logprob_token = math.log(token_count[i]) - log_total
+            logprob_token = math.log(token_count[token.id]) - log_total
             
             # After removing the token[i], its frequency freq[i] is re-assigned to alternatives.
             # new_sum = current_sum - freq[i] + freq[i] * alternatives[i].size()
             #         = current_sum + freq[i] * (alternatives[i] - 1)
-            logsum_alt = math.log(total_count + token_count[i] * (len(alternatives[i]) - 1))
+            logsum_alt = math.log(total_count + token_count[token.id] * (len(alternatives[token.id]) - 1))
             
             # The frequencies of alternatives are increased by freq[i]
             logprob_alt = sum(
-                math.log(token_count[alt_id] + token_count[i]) - logsum_alt
-                for alt_id in alternatives[i]
+                math.log(token_count[alt_id] + token_count[token.id]) - logsum_alt
+                for alt_id in alternatives[token.id]
             )
             # The frequency of token[i] = sum of pretoken freqs where token[i] appears
-            token_i_freq = sum(pretokens[pretoken] for pretoken in inverted[i]) / vsum            
+            token_i_freq = sum(pretokens[pretoken] for pretoken in inverted[token.id]) / vsum            
             # loss: the diff of likelihood after removing the token[i]
             loss = token_i_freq * (logprob_token - logprob_alt)
-            candidates.append((i, loss))
+            candidates.append((token.id, loss))
 
     # reduce vocabulary to target_size
     candidates.sort(key=lambda x: x[1])
-    for i, _ in candidates:
+    if verbose:
+        print(f"    Kept {len(new_tokens)} locked tokens, pruning {len(candidates)} candidates with loss between {candidates[0][1]} and {candidates[-1][1]}")
+
+    for token_id, _ in candidates:
         if len(new_tokens) >= target_size:
             break
-        new_tokens.append(model.tokens[i])
+        new_tokens.append(model.tokens[token_id])
 
     if verbose:
         print(f"    Pruned {len(model.tokens) - len(new_tokens)} tokens -> current vocab size: {len(new_tokens)}")
-    return new_tokens
+    return UnigramModel(new_tokens)
 
 def finalize_tokens(
     model: UnigramModel,
     vocab_size: int,
     verbose: bool = False,
-) -> list[Token]:
+) -> UnigramModel:
     """Finalizes the vocabulary by ensuring required characters are included and keeping top pieces.
     
     This implements the same algorithm as the C++ version, ensuring required characters
@@ -247,8 +252,7 @@ def finalize_tokens(
     
     if verbose:
         print(f"  Final vocabulary size: {len(final_tokens)}")
-    
-    return sorted(final_tokens.values(), key=lambda x: -x.log_prob)
+    return UnigramModel(sorted(final_tokens.values(), key=lambda x: -x.log_prob))
 
 # --- Main Training Function ---
 
@@ -271,8 +275,9 @@ def train_unigram(
     # initialize vocab and model
     required_tokens = set(required_tokens or [])
     vocab = make_initial_vocab(pretokens, required_tokens, vocab_size * initial_vocab_factor, max_token_len)
+    total_pretokens = sum(pretokens.values())
     if verbose:
-        print(f"🌱 Generated {vocab_size} * {initial_vocab_factor} = {len(vocab)} initial tokens with max length {max_token_len} from {len(pretokens)} pretokens")
+        print(f"🌱 Generated {vocab_size:,} * {initial_vocab_factor} = {len(vocab):,} initial tokens with max length {max_token_len} from {total_pretokens:,d} pretokens ({len(pretokens):,} unique)")
     model = UnigramModel(vocab)
 
     # EM Training Loop
@@ -282,33 +287,26 @@ def train_unigram(
         for sub_iter in range(num_sub_iterations):
             if verbose:
                 print(f"    🔄 EM Iteration {iter + 1}, Sub-iteration {sub_iter + 1}/{num_sub_iterations}")
-            expected_count, objective, total_tokens = run_e_step(model, pretokens, verbose)
-            run_m_step(model, expected_count, dirichlet_alpha, verbose)
-            avg_tokens_per_piece = (1.0 * num_tokens / len(model)) if len(model) > 0 else 0
+            expected_count, objective, total_tokens = run_e_step(model, pretokens)
+            model = run_m_step(model, expected_count, dirichlet_alpha, verbose=verbose)
+            avg_tokens_per_pretoken = 1.0 * total_tokens / total_pretokens
             if verbose:
-                print(f"      📈 Updated model. Size: {len(model)}, Obj: {obj:.6f}, Tokens: {num_tokens}, Avg Tokens/Piece: {avg_tokens_per_piece:.2f}")
+                print(f"      📈 Updated model. Size: {len(model.tokens):,}, Obj: {objective:.6f}, Tokens: {total_tokens:,d}, Avg Tokens/Pretoken: {avg_tokens_per_pretoken:.2f}")
 
         # Check Stopping Condition
-        current_size = len(model)
+        current_size = len(model.tokens)
         if current_size <= desired_vocab_size:
-            if verbose: print(f"    ✅ Desired vocab size ({desired_vocab_size}) reached or exceeded ({current_size}). Stopping EM iterations.")
+            if verbose: print(f"    ✅ Desired vocab size {desired_vocab_size:,} reached or exceeded target {current_size:,}. Stopping EM iterations.")
             break
 
         # Pruning Step
-        if verbose: print(f"    🔪 Pruning to shrink vocab towards {desired_vocab_size}...")
-        pruned_tokens = prune_tokens(model, pretokens, vocab_size, pruning_shrinking_factor, verbose)
-        model = UnigramModel(pruned_tokens)
-        iteration += 1
-
-        # Safety break
-        if iteration > 100:
-             if verbose: print("    ⛔ Max iterations (100) reached. Stopping.")
-             break
+        if verbose: print(f"    🔪 Pruning to shrink vocab towards {desired_vocab_size:,}...")
+        model = prune_tokens(model, pretokens, vocab_size, pruning_shrinking_factor, verbose)
 
     # Phase 4: Finalization
     if verbose: print("\n🏁 Phase 3: Finalizing Vocabulary")
-    final_tokens = finalize_tokens(model, vocab_size, verbose)
+    model = finalize_tokens(model, vocab_size, verbose)
     if verbose:
-        print(f"  🏁 Final vocabulary size: {len(final_tokens)}")
+        print(f"  🏁 Final vocabulary size: {len(model.tokens)}")
         print("\n🎉 === Unigram Model Training Completed ===\n")
-    return UnigramModel(final_tokens)
+    return model

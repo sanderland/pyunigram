@@ -9,6 +9,8 @@ def pretokenize_corpus(corpus: Iterable[str], regex_pattern: str = GPT2_PRE_TOKE
      """
      Applies regex pretokenization to a corpus and returns a frequency dict of pretokens.
      """
+     if isinstance(corpus, str):
+         raise ValueError("Corpus must be an iterable of strings, not a single string.")
      pretokenizer = re.compile(regex_pattern)
      pretoken_counter = Counter()
      for text in corpus:
