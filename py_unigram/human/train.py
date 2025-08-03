@@ -1,6 +1,7 @@
 import heapq
 import math
 from collections import Counter, defaultdict
+from pydoc import describe
 from typing import Dict, List, Tuple
 
 from scipy.special import digamma
@@ -73,14 +74,15 @@ def run_m_step(
                       If False, use standard maximum likelihood estimation.
     """
     # Filter infrequent pieces.
+    num_removed = len(model.tokens) - len([t for t in model.tokens if expected_count[t.id] >= k_expected_frequency_threshold or t.locked])
     filtered_tokens = [
         t for t in model.tokens
         if expected_count[t.id] >= k_expected_frequency_threshold or t.locked
     ]
 
     if len(filtered_tokens) < len(model.tokens):
-        if verbose:
-            print(f"      🔍 Filtering: {len(model.tokens) - len(filtered_tokens)} tokens out due to < {k_expected_frequency_threshold} expected frequency.")
+        if verbose and num_removed > 0:
+            print(f"   ├─ Removed {num_removed} low-frequency tokens")
         model = UnigramModel(filtered_tokens)
 
     total_freq = sum(expected_count[t.id] for t in model.tokens)
@@ -96,7 +98,7 @@ def run_m_step(
 def prune_tokens(
     model: UnigramModel,
     pretokens: dict[str, int],
-    vocab_size: int,
+    desired_vocab_size: int,
     shrinking_factor: float = 0.75,
     verbose: bool = False,
 ) -> UnigramModel:
@@ -116,11 +118,11 @@ def prune_tokens(
     """
     # Calculate target size based on vocab size and shrinking factor
     target_size = max(
-        vocab_size,
+        desired_vocab_size,
         int(len(model.tokens) * shrinking_factor)
     )
     if verbose:
-        print(f"    ✂️  Pruning tokens using Viterbi-based pruning from {len(model.tokens)} to {target_size} tokens...")
+        print(f"   ├─ Pruning from {len(model.tokens):,} to {target_size:,} tokens")
     
     # Initialize data structures for tracking token pruning
     always_keep = {t.id: True for t in model.tokens}  # Whether each token must be kept TODO: THIS NAME IS CONFUSING AF
@@ -197,15 +199,19 @@ def prune_tokens(
     # reduce vocabulary to target_size
     candidates.sort(key=lambda x: x[1])
     if verbose:
-        print(f"    Kept {len(new_tokens)} locked tokens, pruning {len(candidates)} candidates with loss between {candidates[0][1]} and {candidates[-1][1]}")
+        print(f"   ├─ Kept {len(new_tokens)} locked tokens")
+        print(f"   ├─ Pruning {len(candidates):,} candidates")
+        print(f"   ├─ Loss range: {candidates[0][1]:.4f} to {candidates[-1][1]:.4f}")
 
     for token_id, _ in candidates:
         if len(new_tokens) >= target_size:
             break
-        new_tokens.append(model.tokens[token_id])
+        new_tokens.append(model.tokens_by_id[token_id])
 
     if verbose:
-        print(f"    Pruned {len(model.tokens) - len(new_tokens)} tokens -> current vocab size: {len(new_tokens)}")
+        pruned = len(model.tokens) - len(new_tokens)
+        print(f"   ├─ Pruned {pruned:,} tokens")
+        print(f"   └─ New vocab size: {len(new_tokens):,}")
     return UnigramModel(new_tokens)
 
 def finalize_tokens(
@@ -214,9 +220,6 @@ def finalize_tokens(
     verbose: bool = False,
 ) -> UnigramModel:
     """Finalizes the vocabulary by ensuring required characters are included and keeping top pieces.
-    
-    This implements the same algorithm as the C++ version, ensuring required characters
-    are included and keeping the highest scoring pieces up to the vocabulary size.
     
     Args:
         model: The UnigramModel containing current tokens
@@ -227,10 +230,8 @@ def finalize_tokens(
         List of Token objects representing the final vocabulary
     """
     if verbose:
-        print("Finalizing vocabulary...")
         print(f"  Target vocabulary size: {vocab_size}")
     
-    # Get all sentence pieces from the model
     final_tokens = {}
     
     min_score_penalty = 0.0
@@ -261,6 +262,7 @@ def train_unigram(
     vocab_size: int = 8000,
     max_token_len: int = 16,
     initial_vocab_factor: int = 4,
+    pre_final_vocab_factor: float = 1.1,
     pruning_shrinking_factor: float = 0.75,
     dirichlet_alpha: float = 1.0,
     required_tokens: list[str] | None = None,
@@ -276,37 +278,51 @@ def train_unigram(
     required_tokens = set(required_tokens or [])
     vocab = make_initial_vocab(pretokens, required_tokens, vocab_size * initial_vocab_factor, max_token_len)
     total_pretokens = sum(pretokens.values())
+    desired_vocab_size = int(vocab_size * pre_final_vocab_factor)
     if verbose:
-        print(f"🌱 Generated {vocab_size:,} * {initial_vocab_factor} = {len(vocab):,} initial tokens with max length {max_token_len} from {total_pretokens:,d} pretokens ({len(pretokens):,} unique)")
+        print(f"🌱 Generated {vocab_size:,} × {initial_vocab_factor} = {len(vocab):,} initial tokens")
+        print(f"   ├─ Max length: {max_token_len}")
+        print(f"   ├─ Source: {total_pretokens:,d} pretokens ({len(pretokens):,} unique)")
+        print(f"   └─ Target vocab size for EM iterations: {desired_vocab_size:,}")
     model = UnigramModel(vocab)
 
     # EM Training Loop
-    desired_vocab_size = int(vocab_size * 1.1)
     for iter in range(max_iterations):
         # Sub-EM Iterations
         for sub_iter in range(num_sub_iterations):
             if verbose:
-                print(f"    🔄 EM Iteration {iter + 1}, Sub-iteration {sub_iter + 1}/{num_sub_iterations}")
+                print(f"\n🔄 EM Iteration {iter + 1}.{sub_iter + 1}")
             expected_count, objective, total_tokens = run_e_step(model, pretokens)
             model = run_m_step(model, expected_count, dirichlet_alpha, verbose=verbose)
             avg_tokens_per_pretoken = 1.0 * total_tokens / total_pretokens
             if verbose:
-                print(f"      📈 Updated model. Size: {len(model.tokens):,}, Obj: {objective:.6f}, Tokens: {total_tokens:,d}, Avg Tokens/Pretoken: {avg_tokens_per_pretoken:.2f}")
+                print(f"   ├─ Model size: {len(model.tokens):,}")
+                print(f"   ├─ Objective: {objective:.4f}")
+                print(f"   ├─ Total tokens: {total_tokens:,d}")
+                print(f"   └─ Avg tokens/pretoken: {avg_tokens_per_pretoken:.4f}")
 
         # Check Stopping Condition
         current_size = len(model.tokens)
         if current_size <= desired_vocab_size:
-            if verbose: print(f"    ✅ Desired vocab size {desired_vocab_size:,} reached or exceeded target {current_size:,}. Stopping EM iterations.")
+            if verbose: 
+                print(f"\n✅ Target vocabulary size reached")
+                print(f"   ├─ Current: {current_size:,}")
+                print(f"   └─ Target: {desired_vocab_size:,}")
             break
 
         # Pruning Step
-        if verbose: print(f"    🔪 Pruning to shrink vocab towards {desired_vocab_size:,}...")
-        model = prune_tokens(model, pretokens, vocab_size, pruning_shrinking_factor, verbose)
+        if verbose: 
+            print(f"\n✂️  Pruning vocabulary")
+            print(f"   ├─ Current size: {len(model.tokens):,}")
+            print(f"   └─ Target size: {desired_vocab_size:,}")
+        model = prune_tokens(model, pretokens, desired_vocab_size, pruning_shrinking_factor, verbose)
 
-    # Phase 4: Finalization
-    if verbose: print("\n🏁 Phase 3: Finalizing Vocabulary")
+    # Finalization
+    if verbose: 
+        print("\n🏁 Finalizing vocabulary")
+        print(f"   ├─ Target size: {vocab_size:,}")
     model = finalize_tokens(model, vocab_size, verbose)
     if verbose:
-        print(f"  🏁 Final vocabulary size: {len(model.tokens)}")
-        print("\n🎉 === Unigram Model Training Completed ===\n")
+        print(f"   └─ Final vocab size: {len(model.tokens):,}")
+        print("🎉  Training completed successfully!")
     return model

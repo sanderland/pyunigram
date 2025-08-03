@@ -4,8 +4,6 @@ from py_unigram.pretokenize import pretokenize_corpus
 with open('swift.txt') as f:
     pretokens = pretokenize_corpus([f.read()])
 
-print(f"Loaded {len(pretokens):,} unique pretokens, total {sum(pretokens.values()):,} pretokens")
-   
 # Train the model
 model = train_unigram(
     pretokens=pretokens,
