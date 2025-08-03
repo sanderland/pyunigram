@@ -1,4 +1,4 @@
-from py_unigram.gemini import train_unigram_model
+from py_unigram.gemini.train import train_unigram_model
 
 
 def test_train_small_vocab():

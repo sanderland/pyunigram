@@ -47,6 +47,10 @@ def test_lattice_viterbi_and_all_paths(simple_lattice):
     # Viterbi should find the best path (ab)
     path, score = simple_lattice.viterbi()
     assert [t.text for t in path] == ["ab"]
+    # test flag for non-direct
+    path2, score2 = simple_lattice.viterbi(allow_single_token=False)
+    assert [t.text for t in path2] == ["a", "b"]
+    assert score2 < score
     # all_paths should return viterbi path first
     all_paths = list(simple_lattice.all_paths())
     assert [t.text for t in all_paths[0][0]] == ["ab"]
@@ -69,12 +73,16 @@ def test_calc_marginal(simple_lattice):
         assert 0.0 <= v <= 1.0
     assert sum(probs.values()) >= 1.0
 
-    # Check that path probabilities sum to z
-    total_path_prob = 0.0
+    total_path_prob = 0.0 # sum of p(path) = z
+    total_path_freq = 0.0 # sum of freq(token) over paths
     for path, path_logprob in simple_lattice.all_paths():
         total_path_prob += math.exp(path_logprob)
+        # only true for independent paths
+        assert all(probs[token.id] == probs[path[0].id] for token in path)
+        total_path_freq += probs[path[0].id]
     
-    assert math.isclose(math.exp(z), total_path_prob, rel_tol=1e-6)
+    assert total_path_prob == pytest.approx(math.exp(z))
+    assert total_path_freq == pytest.approx(1.0)
     
 
 

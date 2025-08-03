@@ -41,14 +41,17 @@ class Lattice:
         self.text = text
         self.tokens_from_pos = tokens_from_pos
 
-    def viterbi(self):
+    def viterbi(self, allow_single_token=True) -> tuple[list[Token], float]:
         best_at_pos = [(None,0)] + [(None,float('-inf'))] * len(self.text)
         for pos in range(len(self.text)):
             for token in self.tokens_from_pos[pos]:
                 end = pos + len(token.text)
+                if pos==0 and not allow_single_token and end==len(self.text):
+                    continue # do not allow direct path
                 score = best_at_pos[pos][1] + token.log_prob
                 if score > best_at_pos[end][1]:
                     best_at_pos[end] = (token, score)
+
         path = []
         pos = len(self.text)
         while pos > 0:
@@ -106,6 +109,52 @@ class UnigramModel:
         self.tokens = tokens # str -> logprob
         self.tokens_by_id = {token.id: token for token in tokens}
         self.trie = Trie(self.tokens)
+        
+    def finalize_sentence_pieces(self, model, required_chars, meta_pieces, vocab_size):
+        """Finalizes sentence pieces by ensuring required chars are included and keeping top pieces.
+        
+        Args:
+            model: The trainer model containing sentence pieces
+            required_chars: Dictionary of required characters to their counts
+            meta_pieces: List of meta pieces that will be added to the vocabulary
+            vocab_size: Desired vocabulary size
+            
+        Returns:
+            List of (piece, score) tuples sorted by score in descending order
+        """
+        sentence_pieces = model.get_sentence_pieces()
+        final_pieces = {}
+        
+        # required_chars must be included in the final sentencepieces.
+        min_score_penalty = 0.0
+        MIN_SCORE_PENALTY_DELTA = 0.0001
+        
+        # Sort required_chars for consistent ordering
+        for char, _ in sorted(required_chars.items()):
+            s = char  # In Python, we can work with Unicode strings directly
+            if s in sentence_pieces:
+                final_pieces[s] = sentence_pieces[s]
+            else:
+                # Add penalty to avoid required pieces from having the same score.
+                # Since the required_chars is sorted, frequent pieces have less penalties.
+                final_pieces[s] = model.min_score() + min_score_penalty
+                min_score_penalty += MIN_SCORE_PENALTY_DELTA
+        
+        vocab_size = vocab_size - len(meta_pieces)
+        if vocab_size <= 0:
+            raise ValueError("Vocab size must be greater than number of meta pieces")
+        
+        # Then keeps sentencepieces with higher scores.
+        # Sort sentence pieces by score in descending order
+        for piece, score in sorted(sentence_pieces.items(), key=lambda x: -x[1]):
+            if piece in final_pieces:
+                continue
+            if len(final_pieces) >= vocab_size:
+                break
+            final_pieces[piece] = score
+        
+        # Return sorted by score in descending order
+        return sorted(final_pieces.items(), key=lambda x: -x[1])
 
     def make_lattice(self, text: str) -> Lattice:
         tokens_from_pos = [self.trie.find_prefixes(text[i:]) for i in range(len(text))]

@@ -3,7 +3,6 @@ from typing import List, Tuple, Union
 
 import regex as re
 
-from py_unigram.gemini import train_unigram_model
 
 from .model import InternalModel
 

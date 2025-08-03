@@ -5,10 +5,9 @@ from collections.abc import Iterable
 import regex as re
 from scipy.special import digamma  # Required for the faithful M-step
 
-from .lattice import Lattice
-from .model import InternalModel
-from .tokenizer import GPT2_PRE_TOKENIZER_REGEX, GeminiUnigramTokenizer
-
+from .model import InternalModel, Lattice
+from .tokenizer import  GeminiUnigramTokenizer
+from py_unigram.pretokenize import GPT2_PRE_TOKENIZER_REGEX
 
 def train_unigram_model(
     corpus: Iterable[str],

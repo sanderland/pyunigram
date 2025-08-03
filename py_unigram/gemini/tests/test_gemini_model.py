@@ -1,6 +1,5 @@
-from py_unigram.gemini import train_unigram_model
-from py_unigram.gemini.lattice import Lattice
-from py_unigram.gemini.model import Trie
+from py_unigram.gemini.train import train_unigram_model
+from py_unigram.gemini.model import Trie, Lattice
 
 # -- lattice
 

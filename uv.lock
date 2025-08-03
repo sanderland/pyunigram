@@ -915,7 +915,7 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dev = [
+development = [
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
@@ -925,13 +925,13 @@ requires-dist = [
     { name = "datasets", specifier = ">=2.15.0" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "pyqt6", specifier = ">=6.9.1" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "pytest", marker = "extra == 'development'", specifier = ">=7.0.0" },
+    { name = "pytest-cov", marker = "extra == 'development'", specifier = ">=4.0.0" },
     { name = "regex", specifier = ">=2024.11.6" },
     { name = "scipy", specifier = ">=1.15.3" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["development"]
 
 [[package]]
 name = "pyarrow"

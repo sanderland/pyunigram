@@ -1,7 +1,8 @@
 
 import pytest
 
-from py_unigram.gemini import UnigramTokenizer, train_unigram_model
+from py_unigram.gemini.tokenizer import GeminiUnigramTokenizer
+from py_unigram.gemini.train import train_unigram_model
 
 BASE_ALPHABET = list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ \t\n\r")
 
@@ -27,7 +28,7 @@ def test_training_vocab_size(tokenizer):
 def test_save_and_load_consistency(tokenizer, tmp_file):
     """Test that saving and loading a tokenizer results in an identical object."""
     tokenizer.save(tmp_file)
-    loaded_tokenizer = UnigramTokenizer.load(tmp_file)
+    loaded_tokenizer = GeminiUnigramTokenizer.load(tmp_file)
 
     assert tokenizer.vocab == loaded_tokenizer.vocab
     assert tokenizer.scores == loaded_tokenizer.scores

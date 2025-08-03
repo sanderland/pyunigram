@@ -92,137 +92,225 @@ def run_m_step(
         for t in model.tokens:
             t.log_prob = math.log(expected_counts[t.id] / total_freq)
 
-
 def prune_pieces(
-    model: TrainerModel,
+    model: UnigramModel,
     pretokens: dict[str, int],
     vocab_size: int,
     shrinking_factor: float = 0.75,
     verbose: bool = False,
-) -> list[tuple[str, float]]:
+) -> list[Token]:
     """
-    Prunes the current set of pieces based on Viterbi analysis and alternative paths.
+    Prunes tokens based on their importance to the model using Viterbi-based pruning.
+    This is a Python port of the C++ PruneSentencePieces function from SentencePiece.
+    
+    Args:
+        model: The UnigramModel containing current tokens
+        pretokens: Dictionary of pretoken frequencies
+        vocab_size: Target vocabulary size
+        shrinking_factor: Factor to reduce vocabulary by (default: 0.75)
+        verbose: Whether to print progress information
+        
+    Returns:
+        List of Token objects after pruning
     """
-    if verbose: print("    🔪 Pruning sentence pieces...")
-    current_pieces = model.pieces
-    piece_size = len(current_pieces)
+    if verbose:
+        print("    ✂️  Pruning tokens using Viterbi-based pruning...")
+    
+    # Get current tokens from the model
+    current_tokens = model.tokens
+    if not current_tokens or vocab_size == 0:
+        return current_tokens
 
-    # Phase 1: Find alternative segmentations for each piece
-    always_keep = [False] * piece_size
-    alternatives: List[List[int]] = [[] for _ in range(piece_size)]
-    for i in range(piece_size):
-        piece_str, _ = current_pieces[i]
-        lattice = Lattice(piece_str)
-        model.populate(lattice)
-        nbest_paths_and_scores = lattice.nbest(2)
-        if len(nbest_paths_and_scores) == 1:
+    # Calculate target size based on vocab size and shrinking factor
+    target_size = min(
+        vocab_size,
+        int(len(current_tokens) * shrinking_factor)
+    )
+    
+    if verbose:
+        print(f"    Pruning from {len(current_tokens)} to {target_size} tokens...")
+
+    if len(current_tokens) <= target_size:
+        if verbose:
+            print(f"    ✓ No pruning needed (current: {len(current_tokens)}, target: {target_size})")
+        return current_tokens
+
+    # Initialize data structures for tracking token pruning
+    always_keep = [True] * len(current_tokens)  # Whether each token must be kept
+    alternatives = [[] for _ in current_tokens]  # Alternative segmentations for each token
+
+    # First, segments the current tokens to know how each token is resegmented if removed
+    # To do so, we take the second best segmentation of token[i].
+    # alternatives[i] stores the sequence of second best tokens.
+    for i, token in enumerate(current_tokens):
+        if token.locked:  # Skip locked tokens (must be kept)
             always_keep[i] = True
-        elif len(nbest_paths_and_scores) >= 2:
-            path1_nodes, _ = nbest_paths_and_scores[0]
-            if len(path1_nodes) >= 2:
+            continue
+            
+        lattice = model.make_lattice(token.text)
+        
+        # Get best path
+        best_path, _ = lattice.viterbi(allow_single_token=True)
+        
+        if len(best_path) >= 2:
+            # Can safely remove this token if its Viterbi path is split
+            always_keep[i] = False
+        else:
+            # Try to find alternative segmentation without single-token path
+            alt_path, _ = lattice.viterbi(allow_single_token=False)
+            if alt_path:
+                # Found alternative segmentation
                 always_keep[i] = False
-            elif len(path1_nodes) == 1:
+                alternatives[i] = [t.id for t in alt_path]
+            else:
+                # No alternative segmentation found, must keep
                 always_keep[i] = True
-                path2_nodes_list, _ = nbest_paths_and_scores[1] if len(nbest_paths_and_scores) > 1 else ([], 0.0)
-                alternatives[i] = [node.piece_id for node in path2_nodes_list]
 
-    # Phase 2: Calculate Viterbi frequencies for all pieces across pretokens
-    freq = [0.0] * piece_size
+    # Second, segments all sentences to compute likelihood
+    # with a unigram language model. inverted[i] stores
+    # the set of sentence index where the tokens[i] appears.
+    freq = [0.0] * len(current_tokens)
+    inverted = [[] for _ in current_tokens]
     vsum = 0.0
-    for pretoken_str, pretoken_freq in pretokens.items():
-        vsum += pretoken_freq
-        lattice = Lattice(pretoken_str)
-        model.populate(lattice)
-        viterbi_path, _ = lattice.viterbi()
-        for node in viterbi_path:
-            if 0 <= node.piece_id < piece_size:
-                freq[node.piece_id] += pretoken_freq
 
-    # Phase 3 & 4: Calculate pruning loss and select pieces to keep
-    candidates: List[Tuple[int, float]] = []
-    new_sentencepieces: List[Tuple[str, float]] = []
-    sum_freq = sum(freq)
-    log_sum_freq = math.log(sum_freq) if sum_freq > 0 else float('-inf')
-    for i in range(piece_size):
+    for pretoken, count in pretokens.items():
+        lattice = model.make_lattice(pretoken)
+        _, token_probs = lattice.calc_marginal()
+        vsum += count
+        
+        for token_id, prob in token_probs.items():
+            if 0 <= token_id < len(freq):
+                freq[token_id] += prob * count
+                inverted[token_id].append(pretoken)
+
+    total_freq = sum(freq)
+    log_total = math.log(total_freq)
+    candidates = []
+    new_tokens = []
+
+    # Finally, computes how likely the LM likelihood is reduced if
+    # the token[i] is removed from the vocabulary.
+    # Since the exact computation of loss is difficult, we compute the
+    # loss approximately by assuming that all token[i] in the sentences
+    # are replaced with alternatives[i] when token[i] is removed.
+    for i, token in enumerate(current_tokens):
         if freq[i] == 0 or not always_keep[i]:
+            # not found in Viterbi path. Can remove this entry safely.
             continue
         elif not alternatives[i]:
-            new_sentencepieces.append(current_pieces[i])
+            # no alternatives. Keeps this entry.
+            new_tokens.append(token)
         else:
-            F = (freq[i] / vsum) if vsum > 0 else 0.0
-            logprob_sp = math.log(freq[i]) - log_sum_freq if freq[i] > 0 and log_sum_freq != float('-inf') else -1e38
-            freq_i = freq[i]
-            num_alternatives = len(alternatives[i])
-            sum_freq_alt = sum_freq + freq_i * (num_alternatives - 1)
-            log_sum_freq_alt = math.log(sum_freq_alt) if sum_freq_alt > 0 else float('-inf')
+            # The frequency of token[i]
+            F = sum(pretokens.get(pretoken, 0) for pretoken in inverted[i]) / vsum
+            
+            # The logprob with the token[i]
+            logprob_token = math.log(freq[i]) - log_total
+            
+            # After removing the token[i], its frequency freq[i] is
+            # re-assigned to alternatives.
+            # new_sum = current_sum - freq[i] + freq[i] * alternatives[i].size()
+            #         = current_sum + freq[i] * (alternatives[i] - 1)
+            new_total = total_freq + freq[i] * (len(alternatives[i]) - 1)
+            logsum_alt = math.log(new_total)
+            
+            # The frequencies of alternatives are increased by freq[i]
             logprob_alt = 0.0
-            for alt_piece_id in alternatives[i]:
-                new_freq_alt_piece = freq[alt_piece_id] + freq_i
-                if new_freq_alt_piece > 0 and log_sum_freq_alt != float('-inf'):
-                    logprob_alt += (math.log(new_freq_alt_piece) - log_sum_freq_alt)
-                else:
-                    logprob_alt += -1e38
-            loss = F * (logprob_sp - logprob_alt) if F > 0 else 0.0
+            for alt_id in alternatives[i]:
+                if 0 <= alt_id < len(freq):
+                    logprob_alt += math.log(freq[alt_id] + freq[i]) - logsum_alt
+            
+            # loss: the diff of likelihood after removing the token[i]
+            loss = F * (logprob_token - logprob_alt)
             candidates.append((i, loss))
 
-    pruned_size = max(vocab_size, int(shrinking_factor * piece_size))
+    # Keeps trainer_spec_.shrinking_factor * tokens.size() pieces.
+    # shrinking_factor is 0.75 by default.
     candidates.sort(key=lambda x: x[1])
-    for piece_index, loss in candidates:
-        if len(new_sentencepieces) >= pruned_size:
+    for i, _ in candidates:
+        if len(new_tokens) >= target_size:
             break
-        new_sentencepieces.append(current_pieces[piece_index])
+        new_tokens.append(current_tokens[i])
 
-    if verbose: print(f"    ✅ Pruning done. Pieces after pruning: {len(new_sentencepieces)}")
-    return new_sentencepieces
+    # Ensure we keep locked tokens that might have been pruned
+    locked_tokens = [t for t in current_tokens if t.locked and t not in new_tokens]
+    new_tokens.extend(locked_tokens)
+
+    if verbose:
+        print(f"    Pruned {len(current_tokens) - len(new_tokens)} tokens")
+        print(f"    Final vocabulary size: {len(new_tokens)}")
+
+    return new_tokens
 
 def finalize_pieces(
-    model: TrainerModel,
-    required_chars: set[str],
+    model: UnigramModel,
     vocab_size: int,
-    meta_pieces: list[str] = None,
+    required_chars: set[str],
     verbose: bool = False,
-) -> list[tuple[str, float]]:
+) -> list[Token]:
+    """Finalizes the vocabulary by ensuring required characters are included and keeping top pieces.
+    
+    This implements the same algorithm as the C++ version, ensuring required characters
+    are included and keeping the highest scoring pieces up to the vocabulary size.
+    
+    Args:
+        model: The UnigramModel containing current tokens
+        vocab_size: Target vocabulary size
+        required_chars: Set of characters that must be included in the final vocabulary
+        verbose: Whether to print progress information
+        
+    Returns:
+        List of Token objects representing the final vocabulary
     """
-    Finalizes the vocabulary to the exact target size, ensuring required characters are present.
-    """
-    if meta_pieces is None:
-        meta_pieces = ["<unk>"]
-    if verbose: print("    🎯 Finalizing sentence pieces...")
-    current_pieces = model.pieces
-    final_pieces_dict: Dict[str, float] = {}
-
-    # Ensure required characters are present
+    if verbose:
+        print("Finalizing vocabulary...")
+        print(f"  Target vocabulary size: {vocab_size}")
+        print(f"  Number of required characters: {len(required_chars)}")
+    
+    # Get all sentence pieces from the model
+    sentence_pieces = {token.text: math.exp(token.log_prob) for token in model.tokens}
+    final_pieces = {}
+    
+    # required_chars_ must be included in the final sentencepieces.
     min_score_penalty = 0.0
-    k_min_score_penalty_delta = 0.0001
-    sorted_required_chars = sorted(list(required_chars))
-    model_min_score = getattr(model, 'min_score', -1e38)
-    for char_str in sorted_required_chars:
-        found = False
-        for piece, score in current_pieces:
-            if piece == char_str:
-                final_pieces_dict[piece] = score
-                found = True
-                break
-        if not found:
-            final_pieces_dict[char_str] = model_min_score + min_score_penalty
-            min_score_penalty += k_min_score_penalty_delta
-
-    # Add other high-score pieces up to vocab_size
-    vocab_size - len(meta_pieces)
-    sorted_current = sorted(current_pieces, key=lambda x: x[1], reverse=True)
-    for piece, score in sorted_current:
-        if len(final_pieces_dict) >= vocab_size:
+    MIN_SCORE_PENALTY_DELTA = 0.0001
+    
+    # Sort required_chars for consistent ordering
+    for char in sorted(required_chars):
+        s = char  # In Python, we can work with Unicode strings directly
+        if s in sentence_pieces:
+            final_pieces[s] = sentence_pieces[s]
+        else:
+            # Add penalty to avoid required pieces from having the same score.
+            # Since the required_chars is sorted, frequent pieces have less penalties.
+            min_score = min(sentence_pieces.values()) if sentence_pieces else 0.0
+            final_pieces[s] = min_score + min_score_penalty
+            min_score_penalty += MIN_SCORE_PENALTY_DELTA
+    
+    # Then keeps sentencepieces with higher scores.
+    # Sort sentence pieces by score in descending order
+    for piece, score in sorted(sentence_pieces.items(), key=lambda x: -x[1]):
+        if piece in final_pieces:
+            continue
+        if len(final_pieces) >= vocab_size:
             break
-        if piece not in final_pieces_dict:
-            final_pieces_dict[piece] = score
-
-    # Sort final pieces by score descending for output and adjust size
-    final_pieces_sorted_list = sorted(final_pieces_dict.items(), key=lambda x: x[1], reverse=True)
-    if len(final_pieces_sorted_list) > vocab_size:
-        final_pieces_sorted_list = final_pieces_sorted_list[:vocab_size]
-
-    if verbose: print(f"    ✅ Finalization done. Final pieces: {len(final_pieces_sorted_list)}")
-    return final_pieces_sorted_list
+        final_pieces[piece] = score
+    
+    # Convert to Token objects, sorted by score in descending order
+    final_tokens = []
+    for i, (piece, score) in enumerate(sorted(final_pieces.items(), key=lambda x: -x[1])):
+        token = Token(
+            text=piece,
+            id=i,
+            log_prob=math.log(score) if score > 0 else float('-inf'),
+            locked=piece in required_chars  # Lock required characters
+        )
+        final_tokens.append(token)
+    
+    if verbose:
+        print(f"  Final vocabulary size: {len(final_tokens)}")
+    
+    return final_tokens
 
 # --- Main Training Function ---
 
@@ -281,7 +369,7 @@ def train_unigram(
 
     # Phase 4: Finalization
     if verbose: print("\n🏁 Phase 3: Finalizing Vocabulary")
-    final_pieces = finalize_pieces(model, required_chars_set, vocab_size, meta_pieces, verbose)
+    final_pieces = finalize_pieces(model, vocab_size, required_chars, verbose)
     if verbose:
         print(f"  🏁 Final vocabulary size: {len(final_pieces)}")
         print("\n🎉 === Unigram Model Training Completed ===\n")
