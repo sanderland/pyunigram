@@ -22,6 +22,8 @@ EXAMPLE_SENTENCES = [
 class VocabularyStats:
     total_size: int = 0
     one_char_tokens: int = 0
+    special_tokens: int = 0
+    regular_tokens: int = 0
     tokens: Set[str] = field(default_factory=set)
 
 @dataclass
@@ -60,10 +62,10 @@ def train_hf_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
     print("\nTraining Hugging Face Unigram Tokenizer...")
     tokenizer = Tokenizer(models.Unigram(byte_fallback=True))
     tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(  # noqa
-        replacement="\u2581",
+        replacement="\u2581", prepend_scheme='never',
     )
     tokenizer.decoder = decoders.Metaspace(  # noqa
-        replacement="\u2581",
+        replacement="\u2581", prepend_scheme='never',
     )    
     #tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
     #tokenizer.decoder = decoders.ByteLevel()
@@ -81,11 +83,20 @@ def train_hf_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
     
     # Get vocabulary statistics
     vocab = tokenizer.get_vocab()
+    special_tokens = {"[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"}
+    
+    # Get all tokens by decoding their IDs
+    tokens = {token: tokenizer.decode([token_id]) for token, token_id in vocab.items()}
+    
     vocab_stats = VocabularyStats(
         total_size=len(vocab),
-        one_char_tokens=sum(1 for token in vocab if len(token) == 1 or (len(token) == 3 and token.startswith('â'))),  # Handle special chars
-        tokens=set(vocab.keys())
+        one_char_tokens=sum(1 for token in tokens.values() if len(token) == 1),
+        tokens=set(tokens.values())
     )
+    
+    # Count special tokens
+    vocab_stats.special_tokens = sum(1 for t in tokens.values() if t in special_tokens)
+    vocab_stats.regular_tokens = len(vocab) - vocab_stats.special_tokens
     
     # Calculate token counts and compression
     total_bytes = 0
@@ -140,7 +151,7 @@ def train_sentencepiece_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
     # Train the model
     spm.SentencePieceTrainer.train(
         f'--input={corpus_file} --model_prefix={model_prefix} --vocab_size={vocab_size} '
-        '--model_type=unigram --character_coverage=1.0 --byte_fallback=true '
+        '--model_type=unigram --character_coverage=1.0 --byte_fallback=false '
         '--pad_id=0 --unk_id=1 --bos_id=2 --eos_id=3 --minloglevel=1' # =0 for logs
     )
     
@@ -149,18 +160,27 @@ def train_sentencepiece_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
     sp_processor.load(f"{model_prefix}.model")
     
     # Get vocabulary statistics
+    special_tokens = {"<unk>", "<s>", "</s>", "<pad>"}
     vocab_stats = VocabularyStats(
         total_size=sp_processor.GetPieceSize(),
         one_char_tokens=0,
         tokens=set()
     )
     
-    # Count one-char tokens and collect all tokens
+    # Process all tokens
     for i in range(sp_processor.GetPieceSize()):
         token = sp_processor.IdToPiece(i)
-        vocab_stats.tokens.add(token)
-        if len(token) == 1 or (len(token) == 3 and token.startswith('â')):  # Handle special chars
+        vocab_stats.tokens.add(token.replace("\u2581", " "))
+        
+        # Check for special tokens
+        if token in special_tokens or (token.startswith('<') and token.endswith('>')):
+            vocab_stats.special_tokens += 1
+        
+        # Check for single character tokens
+        if len(token) == 1:
             vocab_stats.one_char_tokens += 1
+    
+    vocab_stats.regular_tokens = vocab_stats.total_size - vocab_stats.special_tokens
     
     # Calculate token counts and compression
     total_bytes = 0
@@ -264,7 +284,6 @@ def calculate_similarity_matrix(tokenizers: List[TokenizerResult]) -> Dict[str, 
         for t2 in tokenizers[i+1:]:
             if t1.vocab_stats is None or t2.vocab_stats is None:
                 continue
-
             intersection = len(t1.vocab_stats.tokens & t2.vocab_stats.tokens)
             union = len(t1.vocab_stats.tokens | t2.vocab_stats.tokens)
             similarity = (intersection / union) * 100 if union else 0
@@ -290,23 +309,25 @@ def print_results(results: List[TokenizerResult], show_examples: bool = True):
     # Prepare data for statistics table
     stats_data = []
     for result in sorted(results, key=lambda x: x.compression_ratio, reverse=True):
-        vocab_size = result.vocab_stats.total_size if result.vocab_stats else 'N/A'
-        one_char = (f"{result.vocab_stats.one_char_tokens:,} "
-                   f"({result.vocab_stats.one_char_tokens/result.vocab_stats.total_size:.1%})" 
-                   if result.vocab_stats and result.vocab_stats.total_size > 0 else 'N/A')
+        total = result.vocab_stats.total_size
+        one_char = f"{result.vocab_stats.one_char_tokens:,} ({result.vocab_stats.one_char_tokens/total:.1%})"
+        special = f"{result.vocab_stats.special_tokens:,} ({result.vocab_stats.special_tokens/total:.1%})"
+        regular = f"{result.vocab_stats.regular_tokens:,} ({result.vocab_stats.regular_tokens/total:.1%})"
         
         stats_data.append([
             result.name,
             f"{result.token_count:,}",
-            f"{result.compression_ratio:.2f}",
-            str(vocab_size),
-            one_char
+            f"{result.compression_ratio:.4f}",
+            f"{total:,}",
+            one_char,
+            special,
+            regular
         ])
     
     # Print statistics table
     print("\n" + tabulate(
         stats_data,
-        headers=["Tokenizer", "Tokens", "Compression", "Vocab Size", "1-Char Tokens"],
+        headers=["Tokenizer", "Tokens", "Compression", "Vocab Size", "1-Char Tokens", "Special Tokens", "Regular Tokens"],
         tablefmt="grid",
         stralign="right",
         numalign="right"
@@ -419,10 +440,10 @@ def main():
 
     # Train and evaluate each tokenizer
     tokenizers = [
-#        train_my_tokenizer(texts,  "My Unigram default", vocab_size=args.vocab_size),
-#        train_my_tokenizer(texts,  "My Unigram no dp smoothing", vocab_size=args.vocab_size, m_step_dp_smoothing=False),
-#        train_my_tokenizer(texts,  "My Unigram low count threshold 0.01", vocab_size=args.vocab_size, m_step_low_count_threshold=0.01),
+        train_my_tokenizer(texts,  "My Unigram default", vocab_size=args.vocab_size),
+        train_my_tokenizer(texts,  "My Unigram defensive", vocab_size=args.vocab_size, defensive_prune=True),
         train_my_tokenizer(texts,  "My Unigram low count threshold 0", vocab_size=args.vocab_size, m_step_low_count_threshold=0),
+        train_my_tokenizer(texts,  "My Unigram low count threshold 0 with defensive", vocab_size=args.vocab_size, m_step_low_count_threshold=0, defensive_prune=True),
         train_hf_tokenizer(texts, args.vocab_size),
         train_sentencepiece_tokenizer(texts, args.vocab_size),
     ]
