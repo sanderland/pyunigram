@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from py_unigram.human.model import Lattice, Token, Trie, UnigramModel
+from py_unigram.model import Lattice, Token, Trie, UnigramModel
 
 # --- Fixtures ---
 

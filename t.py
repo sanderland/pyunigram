@@ -1,4 +1,4 @@
-from py_unigram.human.train import train_unigram
+from py_unigram.train import train_unigram
 from py_unigram.pretokenize import pretokenize_corpus
 from datasets import load_dataset
 

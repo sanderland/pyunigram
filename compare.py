@@ -9,7 +9,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers, trainers, decoders
 from tabulate import tabulate
 
 from py_unigram.pretokenize import pretokenize_corpus
-from py_unigram.human.train import train_unigram
+from py_unigram.train import train_unigram
 
 # Example sentences to compare tokenizers
 EXAMPLE_SENTENCES = [
@@ -265,7 +265,6 @@ def calculate_similarity_matrix(tokenizers: List[TokenizerResult]) -> Dict[str, 
             if t1.vocab_stats is None or t2.vocab_stats is None:
                 continue
 
-            breakpoint()    
             intersection = len(t1.vocab_stats.tokens & t2.vocab_stats.tokens)
             union = len(t1.vocab_stats.tokens | t2.vocab_stats.tokens)
             similarity = (intersection / union) * 100 if union else 0
