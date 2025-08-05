@@ -90,7 +90,7 @@ class Lattice:
     def calc_marginal(self) -> tuple[float, dict[int, float]]:
         alpha, beta = self._forward_backward()
         z = alpha[-1]
-        assert z != float('-inf'), "Lattice has no valid paths"
+        assert z != float('-inf'), f"Lattice for {self.text!r} has no valid paths with tokens_from_pos {self.tokens_from_pos}"
         token_prob = {}
         for pos in range(len(self.text)):
             for token in self.tokens_from_pos[pos]:

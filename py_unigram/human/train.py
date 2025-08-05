@@ -1,12 +1,21 @@
 import heapq
 import math
 from collections import Counter, defaultdict
-from pydoc import describe
-from typing import Dict, List, Tuple
 
 from scipy.special import digamma
 
-from .model import Lattice, Token, UnigramModel
+from .model import Token, UnigramModel
+
+def print_examples(tokens_with_scores: list[tuple[Token, float]], score_label="score", n=5):
+    tokens_with_scores.sort(key=lambda x: x[1])
+    for i, (t, score) in enumerate(tokens_with_scores):
+        if len(tokens_with_scores) > 2*n:
+            if i==n:
+                print("   │  ├─ ...")
+            if n < i < len(tokens_with_scores) - n:
+                continue
+        list_item = "├─" if i < len(tokens_with_scores) - 1 else "└─"
+        print(f"   │  {list_item} {repr(t.text):<25} {score_label} = {score:2.3g}")
 
 
 def make_initial_vocab(
@@ -21,7 +30,7 @@ def make_initial_vocab(
         for i in range(len(pretoken)): # SentencePiece uses suffix array, this is simpler but more mem intensive
             for j in range(i + 1, min(len(pretoken) + 1, i + max_token_length + 1)):
                 substring_freq[pretoken[i:j]] += freq
-
+    required_tokens |= {t for t in substring_freq if len(t) == 1}
     for token in required_tokens:
         substring_freq[token] = max(substring_freq.get(token, 0), 1)  # Ensure required tokens are always included
     all_tokens = [ (freq * len(token), token) for token, freq in substring_freq.items()]
@@ -29,10 +38,11 @@ def make_initial_vocab(
     selected_tokens = heapq.nlargest(
         num_tokens,
         all_tokens,
-        key=lambda item: (len(item[1])==1 or item[1] in required_tokens, item[0])
+        key=lambda item: (item[1] in required_tokens, item[0])
     )
     log_sum_scores = math.log(sum(score for score, _ in selected_tokens))
-    return [Token(text, i, math.log(score) - log_sum_scores, locked=text in required_tokens) for i, (score, text) in enumerate(selected_tokens)]
+    tokens = [Token(text, i, math.log(score) - log_sum_scores, locked=text in required_tokens) for i, (score, text) in enumerate(selected_tokens)]
+    return tokens
 
 def run_e_step(
     model: UnigramModel,
@@ -67,22 +77,25 @@ def run_m_step(
     dp_smoothing: bool = True,
     k_expected_frequency_threshold = 0.5, # TODO: scale with corpus size
     verbose: bool = False,
-) -> UnigramModel:
+) -> tuple[UnigramModel, int]:
     """Performs the Maximization step of the EM algorithm for Unigram.
         expected_counts: Expected frequency for each token from E-step
         dp_smoothing: If True, use digamma-based sparsity (like SentencePiece).
                       If False, use standard maximum likelihood estimation.
     """
     # Filter infrequent pieces.
-    num_removed = len(model.tokens) - len([t for t in model.tokens if expected_count[t.id] >= k_expected_frequency_threshold or t.locked])
     filtered_tokens = [
         t for t in model.tokens
         if expected_count[t.id] >= k_expected_frequency_threshold or t.locked
     ]
-
-    if len(filtered_tokens) < len(model.tokens):
-        if verbose and num_removed > 0:
-            print(f"   ├─ Removed {num_removed} low-frequency tokens")
+    num_removed = len(model.tokens) - len(filtered_tokens)
+    if num_removed > 0:
+        if verbose:
+            filtered_ids = {t.id for t in filtered_tokens}
+            removed_tokens = [(t, expected_count[t.id]) for t in model.tokens if t.id not in filtered_ids]
+            print(f"   ├─ Removed {num_removed} low-frequency tokens below threshold {k_expected_frequency_threshold} - examples:")
+            print_examples(removed_tokens, "expected count")
+                
         model = UnigramModel(filtered_tokens)
 
     total_freq = sum(expected_count[t.id] for t in model.tokens)
@@ -93,7 +106,8 @@ def run_m_step(
     else: # Standard maximum likelihood estimation
         for t in model.tokens:
             t.log_prob = math.log(expected_count[t.id] / total_freq)
-    return model
+
+    return model, num_removed
 
 def prune_tokens(
     model: UnigramModel,
@@ -101,7 +115,7 @@ def prune_tokens(
     desired_vocab_size: int,
     shrinking_factor: float = 0.75,
     verbose: bool = False,
-) -> UnigramModel:
+) -> tuple[UnigramModel, int]:
     """
     Prunes tokens based on their importance to the model using Viterbi-based pruning.
     This is a Python port of the C++ PruneSentencePieces function from SentencePiece.
@@ -121,9 +135,10 @@ def prune_tokens(
         desired_vocab_size,
         int(len(model.tokens) * shrinking_factor)
     )
-    if verbose:
-        print(f"   ├─ Pruning from {len(model.tokens):,} to {target_size:,} tokens")
-    
+    if verbose: 
+        print(f"\n✂️  Pruning vocabulary")
+        print(f"   ├─ Current size: {len(model.tokens):,}")
+        print(f"   ├─ Target size: {target_size:,} based on shrinking factor {shrinking_factor} and desired vocab size {desired_vocab_size}")    
     # Initialize data structures for tracking token pruning
     always_keep = {t.id: True for t in model.tokens}  # Whether each token must be kept TODO: THIS NAME IS CONFUSING AF
     alternatives = {t.id: [] for t in model.tokens}  # Alternative segmentations for each token
@@ -171,8 +186,11 @@ def prune_tokens(
     # Finally, computes how likely the LM likelihood is reduced if the token[i] is removed from the vocabulary.
     # Since the exact computation of loss is difficult, we compute the loss approximately by assuming that all
     # token[id] in the sentences are replaced with alternatives[i] when token[i] is removed.
+    unused_tokens = []
     for token in model.tokens:
-        if token_count[token.id] == 0 or not always_keep[token.id]:  # not found in Viterbi path. Can remove this entry safely.
+        # not found in Viterbi path. Can remove this entry safely.        
+        if (token_count[token.id] == 0 or not always_keep[token.id]) and not token.locked:
+            unused_tokens.append(token)
             continue
         elif not alternatives[token.id] or token.locked: # no alternatives. Keeps this entry.
             new_tokens.append(token)
@@ -194,31 +212,38 @@ def prune_tokens(
             token_i_freq = sum(pretokens[pretoken] for pretoken in inverted[token.id]) / vsum            
             # loss: the diff of likelihood after removing the token[i]
             loss = token_i_freq * (logprob_token - logprob_alt)
+            #print(f"Loss for {token.text!r}: {loss} = {token_i_freq} * ({logprob_token} - {logprob_alt})")
+            #print(f"  Where alt = sum {[math.log(token_count[alt_id] + token_count[token.id]) - logsum_alt for alt_id in alternatives[token.id]]} from alt path {alternatives[token.id]} = {[model.tokens_by_id[alt_id].text for alt_id in alternatives[token.id]]}")
+            #print(f"  and inverted = {inverted[token.id]} = {[(pretoken, pretokens[pretoken]) for pretoken in inverted[token.id]]}")
+            #print(f"  freq = {token_i_freq*vsum} / {vsum} = {token_i_freq}")
             candidates.append((token.id, loss))
 
     # reduce vocabulary to target_size
-    candidates.sort(key=lambda x: x[1])
+    candidates.sort(key=lambda x: -x[1])
     if verbose:
+        print(f"   ├─ Dropped {len(unused_tokens):,} tokens not in any optimal path. Examples:")
+        print_examples( [(t,  t.log_prob) for t in unused_tokens], "logprob")
         print(f"   ├─ Kept {len(new_tokens)} locked tokens")
         print(f"   ├─ Pruning {len(candidates):,} candidates")
-        print(f"   ├─ Loss range: {candidates[0][1]:.4f} to {candidates[-1][1]:.4f}")
+        print(f"   ├─ Loss range: {candidates[0][1]:.4g} to {candidates[-1][1]:.4g}")
 
     for token_id, _ in candidates:
         if len(new_tokens) >= target_size:
             break
         new_tokens.append(model.tokens_by_id[token_id])
 
+    pruned_tokens = [(model.tokens_by_id[tid], loss) for tid, loss in candidates if model.tokens_by_id[tid] not in new_tokens]
     if verbose:
-        pruned = len(model.tokens) - len(new_tokens)
-        print(f"   ├─ Pruned {pruned:,} tokens")
-        print(f"   └─ New vocab size: {len(new_tokens):,}")
-    return UnigramModel(new_tokens)
+        print(f"   ├─ Pruned {len(pruned_tokens):,} tokens. Examples:")
+        print_examples(pruned_tokens, "loss")
+        print(f"   └─ New vocab size {len(new_tokens):,}")
+    return UnigramModel(new_tokens), len(unused_tokens), len(pruned_tokens)
 
 def finalize_tokens(
     model: UnigramModel,
     vocab_size: int,
     verbose: bool = False,
-) -> UnigramModel:
+) -> tuple[UnigramModel, int]:
     """Finalizes the vocabulary by ensuring required characters are included and keeping top pieces.
     
     Args:
@@ -229,9 +254,6 @@ def finalize_tokens(
     Returns:
         List of Token objects representing the final vocabulary
     """
-    if verbose:
-        print(f"  Target vocabulary size: {vocab_size}")
-    
     final_tokens = {}
     
     min_score_penalty = 0.0
@@ -250,10 +272,18 @@ def finalize_tokens(
         if len(final_tokens) >= vocab_size:
             break
         final_tokens[token.id] = token
-    
+
     if verbose:
-        print(f"  Final vocabulary size: {len(final_tokens)}")
-    return UnigramModel(sorted(final_tokens.values(), key=lambda x: -x.log_prob))
+        print("\n🏁 Finalizing vocabulary")
+        print(f"   ├─ Current size: {len(model.tokens):,}")
+        print(f"   ├─ Target size: {vocab_size:,}")
+        removed_tokens = [(t, t.log_prob) for t in model.tokens if t.id not in final_tokens]
+        print(f"   ├─ Removed {len(removed_tokens):,} tokens - examples:")
+        print_examples(removed_tokens, "logprob")
+        print(f"   └─ Final vocab size: {len(model.tokens):,}")
+
+    final_token_list = sorted(final_tokens.values(), key=lambda x: -x.log_prob)
+    return UnigramModel(final_token_list), len(model.tokens) - len(final_token_list)
 
 # --- Main Training Function ---
 
@@ -264,12 +294,13 @@ def train_unigram(
     initial_vocab_factor: int = 4,
     pre_final_vocab_factor: float = 1.1,
     pruning_shrinking_factor: float = 0.75,
-    dirichlet_alpha: float = 1.0,
+    m_step_dp_smoothing: bool = True,
+    m_step_low_count_threshold: float = 0.5,
     required_tokens: list[str] | None = None,
     max_iterations: int = 100,
     num_sub_iterations: int = 2,
     verbose: bool = False,
-) -> UnigramModel:
+) -> tuple[UnigramModel, dict[str, int]]:
     """Trains a Unigram tokenizer model."""
     if not pretokens:
         raise ValueError("Input 'pretokens' dictionary cannot be empty.")
@@ -278,11 +309,14 @@ def train_unigram(
     required_tokens = set(required_tokens or [])
     vocab = make_initial_vocab(pretokens, required_tokens, vocab_size * initial_vocab_factor, max_token_len)
     total_pretokens = sum(pretokens.values())
+    total_bytes = sum(len(pretoken.encode()*freq) for pretoken, freq in pretokens.items())
     desired_vocab_size = int(vocab_size * pre_final_vocab_factor)
+    totals_removed = defaultdict(list)
+    
     if verbose:
         print(f"🌱 Generated {vocab_size:,} × {initial_vocab_factor} = {len(vocab):,} initial tokens")
         print(f"   ├─ Max length: {max_token_len}")
-        print(f"   ├─ Source: {total_pretokens:,d} pretokens ({len(pretokens):,} unique)")
+        print(f"   ├─ Source: {total_pretokens:,d} pretokens ({len(pretokens):,} unique), {total_bytes:,d} bytes")
         print(f"   └─ Target vocab size for EM iterations: {desired_vocab_size:,}")
     model = UnigramModel(vocab)
 
@@ -293,7 +327,8 @@ def train_unigram(
             if verbose:
                 print(f"\n🔄 EM Iteration {iter + 1}.{sub_iter + 1}")
             expected_count, objective, total_tokens = run_e_step(model, pretokens)
-            model = run_m_step(model, expected_count, dirichlet_alpha, verbose=verbose)
+            model, m_step_removed = run_m_step(model, expected_count, dp_smoothing=m_step_dp_smoothing, k_expected_frequency_threshold=m_step_low_count_threshold, verbose=verbose)
+            totals_removed["M Step Low Count"].append(m_step_removed)
             avg_tokens_per_pretoken = 1.0 * total_tokens / total_pretokens
             if verbose:
                 print(f"   ├─ Model size: {len(model.tokens):,}")
@@ -305,24 +340,34 @@ def train_unigram(
         current_size = len(model.tokens)
         if current_size <= desired_vocab_size:
             if verbose: 
-                print(f"\n✅ Target vocabulary size reached")
+                print(f"\n✅ Target vocabulary size for EM iterations reached")
                 print(f"   ├─ Current: {current_size:,}")
-                print(f"   └─ Target: {desired_vocab_size:,}")
+                print(f"   └─ Target:  {desired_vocab_size:,}")
             break
 
         # Pruning Step
-        if verbose: 
-            print(f"\n✂️  Pruning vocabulary")
-            print(f"   ├─ Current size: {len(model.tokens):,}")
-            print(f"   └─ Target size: {desired_vocab_size:,}")
-        model = prune_tokens(model, pretokens, desired_vocab_size, pruning_shrinking_factor, verbose)
+        model, num_unused, num_pruned = prune_tokens(model, pretokens, desired_vocab_size, pruning_shrinking_factor, verbose)
+        totals_removed["Prune/Zero Count"].append(num_unused)
+        totals_removed["Prune/Loss"].append(num_pruned)
 
     # Finalization
-    if verbose: 
-        print("\n🏁 Finalizing vocabulary")
-        print(f"   ├─ Target size: {vocab_size:,}")
-    model = finalize_tokens(model, vocab_size, verbose)
+    model, finalize_removed = finalize_tokens(model, vocab_size, verbose)
+    totals_removed["Finalize"].append(finalize_removed)
+
+    total_tokens = sum(len(model.make_lattice(pretoken).viterbi()[0])*freq for pretoken, freq in pretokens.items())
+    stats = {
+        "total_tokens": total_tokens,
+        "tokens/pretoken": total_tokens / total_pretokens,
+        "bytes/token": total_bytes / total_tokens,
+    }
     if verbose:
-        print(f"   └─ Final vocab size: {len(model.tokens):,}")
-        print("🎉  Training completed successfully!")
-    return model
+        print("\n🎉  Training completed successfully!")
+        print("\n📊 Token Removal Statistics:")
+        for key, value in totals_removed.items():
+            print(f" ├─ {key:<20} {sum(value):6,d} tokens" + (f" in steps {value}" if len(value) > 1 else ""))
+        print("📊 Compression Statistics:")
+        print(f" ├─ Total tokens: {stats['total_tokens']:,d}")
+        print(f" ├─ Avg tokens/pretoken: {stats['tokens/pretoken']:.4f}")
+        print(f" └─ Avg bytes/token: {stats['bytes/token']:.4f}")
+
+    return model, stats
