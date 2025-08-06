@@ -306,7 +306,7 @@ def train_unigram(
     pretokens: dict[str, int],
     vocab_size: int = 8000,
     max_token_len: int = 16,
-    initial_vocab_factor: int = 4,
+    initial_vocab_factor: int = 10,
     pre_final_vocab_factor: float = 1.1,
     pruning_shrinking_factor: float = 0.75,
     m_step_dp_smoothing: bool = True,

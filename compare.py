@@ -121,7 +121,7 @@ def train_hf_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
         ))
     
     return TokenizerResult(
-        name="Hugging Face Unigram",
+        name="* Hugging Face Unigram",
         token_count=total_tokens,
         compression_ratio=compression_ratio,
         vocab_stats=vocab_stats,
@@ -205,7 +205,7 @@ def train_sentencepiece_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
         ))
     
     result = TokenizerResult(
-        name="SentencePiece Unigram",
+        name="* SentencePiece Unigram",
         token_count=total_tokens,
         compression_ratio=compression_ratio,
         vocab_stats=vocab_stats,
@@ -278,21 +278,16 @@ def train_my_tokenizer(texts, name="My Unigram", **kwargs) -> TokenizerResult:
 
 def calculate_similarity_matrix(tokenizers: List[TokenizerResult]) -> Dict[str, Dict[str, float]]:
     """Calculate Jaccard similarity matrix between all tokenizers."""
-    matrix = {t.name: {t2.name: 0.0 for t2 in tokenizers} for t in tokenizers}
+    jacard = {t.name: {t2.name: 0.0 for t2 in tokenizers if t2.name.startswith("*")} for t in tokenizers}
     
-    for i, t1 in enumerate(tokenizers):
-        for t2 in tokenizers[i+1:]:
-            if t1.vocab_stats is None or t2.vocab_stats is None:
-                continue
-            intersection = len(t1.vocab_stats.tokens & t2.vocab_stats.tokens)
-            union = len(t1.vocab_stats.tokens | t2.vocab_stats.tokens)
-            similarity = (intersection / union) * 100 if union else 0
-            
-            matrix[t1.name][t2.name] = similarity
-            if t1 != t2:  # Avoid duplicate work
-                matrix[t2.name][t1.name] = similarity
+    for t1 in tokenizers:
+        for t2 in tokenizers:
+            if t2.name in jacard[t1.name]:
+                intersection = len(t1.vocab_stats.tokens & t2.vocab_stats.tokens)
+                union = len(t1.vocab_stats.tokens | t2.vocab_stats.tokens)
+                jacard[t1.name][t2.name] = (intersection / union) * 100 if union else 0                
                 
-    return matrix
+    return jacard
 
 def print_results(results: List[TokenizerResult], show_examples: bool = True):
     """Print the tokenizer comparison results and examples.
@@ -339,24 +334,12 @@ def print_results(results: List[TokenizerResult], show_examples: bool = True):
         print("VOCABULARY SIMILARITY MATRIX (Jaccard %)")
         print("="*80)
         
-        similarity_matrix = calculate_similarity_matrix(results)
-        tokenizer_names = [r.name for r in results]
-        
-        # Prepare similarity table data
-        sim_data = []
-        for name1 in tokenizer_names:
-            row = [name1]
-            for name2 in tokenizer_names:
-                if name1 == name2:
-                    row.append("-")
-                else:
-                    row.append(f"{similarity_matrix[name1][name2]:.1f}%")
-            sim_data.append(row)
-        
+        jacard = calculate_similarity_matrix(results)
+        similarity = [{"name": k, **cols} for k, cols in jacard.items()]        
         # Print similarity table
         print("\n" + tabulate(
-            sim_data,
-            headers=[""] + tokenizer_names,
+            similarity,
+            headers="keys",
             tablefmt="grid",
             stralign="right",
             numalign="right"
@@ -440,10 +423,9 @@ def main():
 
     # Train and evaluate each tokenizer
     tokenizers = [
-        train_my_tokenizer(texts,  "My Unigram default", vocab_size=args.vocab_size),
-        train_my_tokenizer(texts,  "My Unigram defensive", vocab_size=args.vocab_size, defensive_prune=True),
-        train_my_tokenizer(texts,  "My Unigram low count threshold 0", vocab_size=args.vocab_size, m_step_low_count_threshold=0),
-        train_my_tokenizer(texts,  "My Unigram low count threshold 0 with defensive", vocab_size=args.vocab_size, m_step_low_count_threshold=0, defensive_prune=True),
+        train_my_tokenizer(texts,  "* My Unigram default", vocab_size=args.vocab_size),
+        train_my_tokenizer(texts,  "My Unigram shrink slow", vocab_size=args.vocab_size, pruning_shrinking_factor=0.59),
+        train_my_tokenizer(texts,  "My Unigram no m-step removals", vocab_size=args.vocab_size, m_step_low_count_threshold=0),
         train_hf_tokenizer(texts, args.vocab_size),
         train_sentencepiece_tokenizer(texts, args.vocab_size),
     ]
