@@ -3,8 +3,12 @@ from collections.abc import Iterable
 from collections import defaultdict
 from dataclasses import dataclass
 
-from scipy.special import logsumexp
 
+def logaddexp(a: float, b: float) -> float:
+    """Stable log(exp(a) + exp(b)) for two finite terms."""
+    if a < b:
+        a, b = b, a
+    return a + math.log1p(math.exp(b - a))
 
 @dataclass
 class Token:
@@ -81,11 +85,11 @@ class Lattice:
         for pos in range(len(self.text)):
             if alpha[pos] != float('-inf'):
                 for token in self.tokens_from_pos[pos]:
-                    alpha[pos + len(token.text)] = logsumexp([alpha[pos + len(token.text)], alpha[pos] + token.log_prob])
+                    alpha[pos + len(token.text)] = logaddexp(alpha[pos + len(token.text)], alpha[pos] + token.log_prob)
         for pos in range(len(self.text)-1, -1, -1):
             for token in self.tokens_from_pos[pos]:
                 if beta[pos + len(token.text)] != float('-inf'):
-                    beta[pos] = logsumexp([beta[pos], beta[pos + len(token.text)] + token.log_prob])
+                    beta[pos] = logaddexp(beta[pos], beta[pos + len(token.text)] + token.log_prob)
         return alpha, beta
 
     def calc_marginal(self) -> tuple[float, dict[int, float]]:

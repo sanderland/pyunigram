@@ -179,7 +179,7 @@ def prune_tokens(
             token_count[token.id] += count
             inverted[token.id].append(pretoken)
 
-    total_count = sum(token_count)
+    total_count = sum(token_count.values())
     log_total = math.log(total_count)
     candidates = []
     new_tokens = []
@@ -214,7 +214,9 @@ def prune_tokens(
                 for alt_id in alternatives[token.id]
             )
             # The frequency of token[i] = sum of pretoken freqs where token[i] appears
-            token_i_freq = sum(pretokens[pretoken] for pretoken in inverted[token.id]) / vsum            
+            token_i_freq = sum(pretokens[pretoken] for pretoken in inverted[token.id]) / vsum
+            if sum(pretokens[pretoken] for pretoken in inverted[token.id]) != token_count[token.id]:
+                breakpoint()
             # loss: the diff of likelihood after removing the token[i]
             loss = token_i_freq * (logprob_token - logprob_alt)
             # (NEW FEATURE) if alternatives are already gone, optionally prevent removing this token
@@ -244,7 +246,8 @@ def prune_tokens(
             defended_tokens.append((token, loss))
             new_tokens.append(token)
 
-    pruned_tokens = [(token, loss) for token, loss, _ in candidates if token not in new_tokens]
+    new_token_ids = {t.id for t in new_tokens}
+    pruned_tokens = [(token, loss) for token, loss, _ in candidates if token.id not in new_token_ids]
     if verbose:
         print(f"   ├─ Pruned {len(pruned_tokens):,} tokens from {len(candidates):,} candidates. Examples:")
         print_examples(pruned_tokens, "loss")

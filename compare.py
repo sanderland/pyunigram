@@ -1,4 +1,5 @@
 import os
+import regex as re
 import argparse
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
@@ -60,13 +61,13 @@ def train_hf_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
         TokenizerResult with token count and compression ratio
     """
     print("\nTraining Hugging Face Unigram Tokenizer...")
-    tokenizer = Tokenizer(models.Unigram(byte_fallback=True))
-    tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(  # noqa
-        replacement="\u2581", prepend_scheme='never',
+    tokenizer = Tokenizer(models.Unigram(byte_fallback=False))
+    tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(
+        replacement="\u2581", prepend_scheme='always',
     )
-    tokenizer.decoder = decoders.Metaspace(  # noqa
-        replacement="\u2581", prepend_scheme='never',
-    )    
+    tokenizer.decoder = decoders.Metaspace(
+        replacement="\u2581", prepend_scheme='always',
+    )
     #tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
     #tokenizer.decoder = decoders.ByteLevel()
     #tokenizer.post_processor = processors.ByteLevel()
@@ -152,7 +153,8 @@ def train_sentencepiece_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
     spm.SentencePieceTrainer.train(
         f'--input={corpus_file} --model_prefix={model_prefix} --vocab_size={vocab_size} '
         '--model_type=unigram --character_coverage=1.0 --byte_fallback=false '
-        '--pad_id=0 --unk_id=1 --bos_id=2 --eos_id=3 --minloglevel=1' # =0 for logs
+        '--normalization_rule_name=identity --remove_extra_whitespaces=false --add_dummy_prefix=true '
+        '--pad_id=0 --unk_id=1 --bos_id=2 --eos_id=3 --minloglevel=1'
     )
     
     # Load the trained model
@@ -222,7 +224,10 @@ def train_sentencepiece_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
         
     return result
 
-def train_my_tokenizer(texts, name="My Unigram", **kwargs) -> TokenizerResult:
+MY_PRETOK_REGEX = r" ?\p{L}+|\s+|[^\s\p{L}]+"
+_MY_PRETOK_PATTERN = re.compile(MY_PRETOK_REGEX)
+
+def train_my_tokenizer(texts, name="My Unigram", *, pretokenization: str = "spaces", **kwargs) -> TokenizerResult:
     """Train and test a human-implemented Unigram tokenizer.
     
     Args:
@@ -235,7 +240,12 @@ def train_my_tokenizer(texts, name="My Unigram", **kwargs) -> TokenizerResult:
     print("\nTraining Human Unigram Tokenizer...")
     
     # Get pretokens (text chunks with frequencies)
-    pretokens = pretokenize_corpus(texts)
+    if pretokenization == "spaces":
+        pretokens = pretokenize_corpus(texts, regex_pattern=MY_PRETOK_REGEX)
+    elif pretokenization == "gpt2":
+        pretokens = pretokenize_corpus(texts)
+    else:
+        raise ValueError(f"Unknown pretokenization: {pretokenization}")
     print(f"Loaded {len(pretokens):,} unique pretokens, total {sum(pretokens.values()):,} pretokens")
     
     kwargs = {"vocab_size": 20000, "max_token_len": 16, "initial_vocab_factor": 4, **kwargs}
@@ -258,10 +268,8 @@ def train_my_tokenizer(texts, name="My Unigram", **kwargs) -> TokenizerResult:
     # Tokenize example sentences
     examples = []
     for sentence in EXAMPLE_SENTENCES:
-        # Get token IDs
         token_ids = model.encode(sentence)
-        # Convert token IDs to strings
-        token_strings = [model.tokens_by_id[id].text.replace(' ','▁') for id in token_ids]
+        token_strings = [model.tokens_by_id[id].text for id in token_ids]
         examples.append(TokenizationExample(
             original=sentence,
             tokens=token_strings,
@@ -423,9 +431,10 @@ def main():
 
     # Train and evaluate each tokenizer
     tokenizers = [
-        train_my_tokenizer(texts,  "* My Unigram default", vocab_size=args.vocab_size),
-        train_my_tokenizer(texts,  "My Unigram shrink slow", vocab_size=args.vocab_size, pruning_shrinking_factor=0.59),
-        train_my_tokenizer(texts,  "My Unigram no m-step removals", vocab_size=args.vocab_size, m_step_low_count_threshold=0),
+        train_my_tokenizer(texts,  "* My Unigram (spaces)", vocab_size=args.vocab_size),
+        train_my_tokenizer(texts,  "My Unigram shrink slow (spaces)", vocab_size=args.vocab_size, pruning_shrinking_factor=0.95),
+        train_my_tokenizer(texts,  "My Unigram no m-step removals (spaces)", vocab_size=args.vocab_size, m_step_low_count_threshold=0),
+        train_my_tokenizer(texts,  "My Unigram (gpt2)", vocab_size=args.vocab_size, pretokenization="gpt2"),
         train_hf_tokenizer(texts, args.vocab_size),
         train_sentencepiece_tokenizer(texts, args.vocab_size),
     ]
