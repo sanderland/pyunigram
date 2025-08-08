@@ -1,5 +1,6 @@
 import math
 from collections.abc import Iterable
+from collections import defaultdict
 from dataclasses import dataclass
 
 from scipy.special import logsumexp
@@ -91,11 +92,11 @@ class Lattice:
         alpha, beta = self._forward_backward()
         z = alpha[-1]
         assert z != float('-inf'), f"Lattice for {self.text!r} has no valid paths with tokens_from_pos {self.tokens_from_pos}"
-        token_prob = {}
+        token_prob = defaultdict(float)
         for pos in range(len(self.text)):
             for token in self.tokens_from_pos[pos]:
                 token_logprob = alpha[pos] + token.log_prob + beta[pos + len(token.text)] - z
-                token_prob[token.id] = math.exp(max(-100, token_logprob))  # Avoid underflow
+                token_prob[token.id] += math.exp(max(-100, token_logprob))  # Avoid underflow
 
         return z, token_prob
 
