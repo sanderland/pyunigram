@@ -243,12 +243,12 @@ def finalize_tokens(
         final_tokens[token.id] = token
 
     removed_tokens = [(t, t.log_prob) for t in model.tokens if t.id not in final_tokens]
-    logger.info(f"✨ Finalizing vocabulary from {len(model.tokens):,} to target {vocab_size:,}")
-    logger.info(f" ├─ Kept {len(final_tokens):,} tokens")
-    logger.info(f" └─ Removed {len(removed_tokens):,} tokens")
-    log_examples(logger, removed_tokens, "logprob")
-
     new_model = UnigramModel(final_tokens.values())
+    logger.info(f"✨ Finalizing vocabulary from {len(model.tokens):,} to target {vocab_size:,}")
+    logger.info(f"   ├─ Removed {len(removed_tokens):,} tokens")
+    log_examples(logger, removed_tokens, "logprob")
+    logger.info(f"   └─ Kept {len(final_tokens):,} tokens with logprob range {new_model.tokens[0].log_prob:.4g} to {new_model.tokens[-1].log_prob:.4g}")
+
     return new_model, len(model.tokens) - len(new_model.tokens)
 
 
@@ -349,15 +349,17 @@ def train_unigram(
     model, finalize_removed = finalize_tokens(logger=logger, model=model, vocab_size=vocab_size)
     totals_removed["Finalize"].append(finalize_removed)
 
-    total_tokens = sum(len(model.make_lattice(pretoken).viterbi()[0]) * freq for pretoken, freq in pretokens.items())
+    # Final e-step for stats
+    expected_count, objective, total_tokens = run_e_step(logger, model=model, pretokens=pretokens)
     stats = {
+        "objective": objective,
         "total_tokens": total_tokens,
         "tokens/pretoken": total_tokens / total_pretokens,
         "bytes/token": total_bytes / total_tokens,
     }
     num_defended = len(defended_token_ids)
     defended_in_final = [(t, t.log_prob) for t in model.tokens if t.id in defended_token_ids]
-    logger.info(f"🎉 Training completed successfully! Avg tokens/pretoken: {stats['tokens/pretoken']:.4f}")
+    logger.info(f"🎉 Training completed successfully! Objective: {stats['objective']:.4f}")
     logger.debug("  📊 Token Removal Statistics:")
     for key, value in totals_removed.items():
         logger.debug(f"   ├─ {key:<20} {sum(value):6,d} tokens" + (f" in steps {value}" if len(value) > 1 else ""))

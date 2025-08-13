@@ -1,7 +1,7 @@
 from py_unigram.pretokenize import pretokenize_corpus
 from py_unigram.train import train_unigram
 
-with open("swift.txt") as f:
+with open("swift_clean.txt") as f:
     pretokens = pretokenize_corpus([f.read()])
 n = 1024
 

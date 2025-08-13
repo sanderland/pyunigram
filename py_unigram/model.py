@@ -113,8 +113,8 @@ class UnigramModel:
     """Unigram model of text: essentially a collection of tokens and their logprobs."""
 
     def __init__(self, tokens: list[Token]):
-        self.tokens = tokens
-        self.tokens_by_id = {token.id: token for token in tokens}
+        self.tokens = list(tokens)
+        self.tokens_by_id = {token.id: token for token in self.tokens}
         self.trie = Trie(self.tokens)
 
     def make_lattice(self, text: str) -> Lattice:

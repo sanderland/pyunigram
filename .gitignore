@@ -1,7 +1,6 @@
 
 # logs
-log*.txt
-dump.py
+log*.*
 
 # Python
 __pycache__
