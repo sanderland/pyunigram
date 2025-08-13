@@ -3,6 +3,8 @@ import math
 import pytest
 
 from py_unigram.model import Lattice, Token, Trie, UnigramModel
+from py_unigram.pretokenize import pretokenize_corpus
+from py_unigram.train import train_unigram
 
 # --- Fixtures ---
 
@@ -35,6 +37,13 @@ def simple_lattice(simple_tokens):
 @pytest.fixture
 def simple_model(simple_tokens):
     return UnigramModel(simple_tokens)
+
+
+@pytest.fixture
+def swift_data():
+    with open("tests/data/swift_clean.txt") as f:
+        pretokens = pretokenize_corpus([f.read()])
+    return pretokens
 
 
 # --- Trie tests ---
@@ -113,3 +122,13 @@ def test_unigram_model_make_lattice_paths(simple_model, text, expected):
     lattice = simple_model.make_lattice(text)
     all_paths = [tuple(t.text for t in p) for p, _ in lattice.all_paths()]
     assert set(all_paths) == set(expected)
+
+
+# --- end to end tests
+
+
+def test_end_to_end(swift_data):
+    n = 1024
+    model, stats = train_unigram(pretokens=swift_data, vocab_size=n, max_token_len=16, initial_vocab_factor=4)
+    assert len(model.tokens) == n
+    assert 5 < stats['objective'] < 15

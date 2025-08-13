@@ -247,7 +247,9 @@ def finalize_tokens(
     logger.info(f"✨ Finalizing vocabulary from {len(model.tokens):,} to target {vocab_size:,}")
     logger.info(f"   ├─ Removed {len(removed_tokens):,} tokens")
     log_examples(logger, removed_tokens, "logprob")
-    logger.info(f"   └─ Kept {len(final_tokens):,} tokens with logprob range {new_model.tokens[0].log_prob:.4g} to {new_model.tokens[-1].log_prob:.4g}")
+    logger.info(
+        f"   └─ Kept {len(final_tokens):,} tokens with logprob range {new_model.tokens[0].log_prob:.4g} to {new_model.tokens[-1].log_prob:.4g}"
+    )
 
     return new_model, len(model.tokens) - len(new_model.tokens)
 
