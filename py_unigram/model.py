@@ -1,6 +1,6 @@
 import math
-from collections.abc import Iterable
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 
@@ -10,12 +10,14 @@ def logaddexp(a: float, b: float) -> float:
         a, b = b, a
     return a + math.log1p(math.exp(b - a))
 
+
 @dataclass
 class Token:
     text: str
     id: int
     log_prob: float
-    locked: bool = False # if true, can not be removed
+    required: bool = False  # if true, can not be removed
+
 
 class Trie:
     def __init__(self, tokens: list[Token]):
@@ -47,12 +49,12 @@ class Lattice:
         self.tokens_from_pos = tokens_from_pos
 
     def viterbi(self, allow_single_token=True) -> tuple[list[Token], float]:
-        best_at_pos = [(None,0)] + [(None,float('-inf'))] * len(self.text)
+        best_at_pos = [(None, 0)] + [(None, float("-inf"))] * len(self.text)
         for pos in range(len(self.text)):
             for token in self.tokens_from_pos[pos]:
                 end = pos + len(token.text)
-                if pos==0 and not allow_single_token and end==len(self.text):
-                    continue # do not allow direct path
+                if pos == 0 and not allow_single_token and end == len(self.text):
+                    continue  # do not allow direct path
                 score = best_at_pos[pos][1] + token.log_prob
                 if score > best_at_pos[end][1]:
                     best_at_pos[end] = (token, score)
@@ -73,29 +75,31 @@ class Lattice:
             return
         for token in self.tokens_from_pos[starting_pos]:
             for sub_path, sub_prob in self.all_paths(starting_pos + len(token.text)):
-                yield ( (token,) + sub_path, sub_prob + token.log_prob)
+                yield ((token,) + sub_path, sub_prob + token.log_prob)
 
     def _forward_backward(self) -> tuple[list[float], list[float]]:
         """returns
         alpha(pos) = total prob of path to pos
         beta(pos) = total prob of path from pos to end
         """
-        alpha = [0] + [float('-inf')] * len(self.text)
-        beta = [float('-inf')] * (len(self.text)) + [0]
+        alpha = [0] + [float("-inf")] * len(self.text)
+        beta = [float("-inf")] * (len(self.text)) + [0]
         for pos in range(len(self.text)):
-            if alpha[pos] != float('-inf'):
+            if alpha[pos] != float("-inf"):
                 for token in self.tokens_from_pos[pos]:
                     alpha[pos + len(token.text)] = logaddexp(alpha[pos + len(token.text)], alpha[pos] + token.log_prob)
-        for pos in range(len(self.text)-1, -1, -1):
+        for pos in range(len(self.text) - 1, -1, -1):
             for token in self.tokens_from_pos[pos]:
-                if beta[pos + len(token.text)] != float('-inf'):
+                if beta[pos + len(token.text)] != float("-inf"):
                     beta[pos] = logaddexp(beta[pos], beta[pos + len(token.text)] + token.log_prob)
         return alpha, beta
 
     def calc_marginal(self) -> tuple[float, dict[int, float]]:
         alpha, beta = self._forward_backward()
         z = alpha[-1]
-        assert z != float('-inf'), f"Lattice for {self.text!r} has no valid paths with tokens_from_pos {self.tokens_from_pos}"
+        assert z != float("-inf"), (
+            f"Lattice for {self.text!r} has no valid paths with tokens_from_pos {self.tokens_from_pos}"
+        )
         token_prob = defaultdict(float)
         for pos in range(len(self.text)):
             for token in self.tokens_from_pos[pos]:
@@ -105,8 +109,6 @@ class Lattice:
         return z, token_prob
 
 
-
-
 class UnigramModel:
     """Unigram model of text: essentially a collection of tokens and their logprobs."""
 
@@ -114,7 +116,7 @@ class UnigramModel:
         self.tokens = tokens
         self.tokens_by_id = {token.id: token for token in tokens}
         self.trie = Trie(self.tokens)
-        
+
     def make_lattice(self, text: str) -> Lattice:
         tokens_from_pos = [self.trie.find_prefixes(text[i:]) for i in range(len(text))]
         return Lattice(text, tokens_from_pos)
@@ -128,4 +130,4 @@ class UnigramModel:
             return [token.id for token in tokens]
 
     def decode(self, ids: list[int]) -> str:
-        return ''.join(self.tokens_by_id[id].text for id in ids)
+        return "".join(self.tokens_by_id[id].text for id in ids)

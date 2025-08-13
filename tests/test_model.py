@@ -6,6 +6,7 @@ from py_unigram.model import Lattice, Token, Trie, UnigramModel
 
 # --- Fixtures ---
 
+
 @pytest.fixture
 def simple_tokens():
     # id, text, log_prob
@@ -15,22 +16,26 @@ def simple_tokens():
         Token(text="ab", id=2, log_prob=math.log(0.7)),
     ]
 
+
 @pytest.fixture
 def simple_trie(simple_tokens):
     return Trie(simple_tokens)
+
 
 @pytest.fixture
 def simple_lattice(simple_tokens):
     # For text 'ab', tokens_from_pos[0] = [ab, a], tokens_from_pos[1] = [b]
     tokens_from_pos = [
         [simple_tokens[2], simple_tokens[0]],  # 'ab', 'a' at pos 0
-        [simple_tokens[1]],                    # 'b' at pos 1
+        [simple_tokens[1]],  # 'b' at pos 1
     ]
     return Lattice("ab", tokens_from_pos)
+
 
 @pytest.fixture
 def simple_model(simple_tokens):
     return UnigramModel(simple_tokens)
+
 
 # --- Trie tests ---
 def test_trie_prefix_search(simple_trie):
@@ -41,6 +46,7 @@ def test_trie_prefix_search(simple_trie):
     assert 2 in found_ids  # 'ab'
     # Should not find anything for 'x'
     assert simple_trie.find_prefixes("x") == []
+
 
 # --- Lattice tests ---
 def test_lattice_viterbi_and_all_paths(simple_lattice):
@@ -59,12 +65,14 @@ def test_lattice_viterbi_and_all_paths(simple_lattice):
     # Scores should match viterbi for first path
     assert math.isclose(all_paths[0][1], score)
 
+
 def test_lattice_viterbi_empty():
     # Empty lattice
     lattice = Lattice("", [])
     path, score = lattice.viterbi()
     assert path == []
-    assert score == float('-inf') or score == 0.0
+    assert score == float("-inf") or score == 0.0
+
 
 def test_calc_marginal(simple_lattice):
     z, probs = simple_lattice.calc_marginal()
@@ -73,17 +81,16 @@ def test_calc_marginal(simple_lattice):
         assert 0.0 <= v <= 1.0
     assert sum(probs.values()) >= 1.0
 
-    total_path_prob = 0.0 # sum of p(path) = z
-    total_path_freq = 0.0 # sum of freq(token) over paths
+    total_path_prob = 0.0  # sum of p(path) = z
+    total_path_freq = 0.0  # sum of freq(token) over paths
     for path, path_logprob in simple_lattice.all_paths():
         total_path_prob += math.exp(path_logprob)
         # only true for independent paths
         assert all(probs[token.id] == probs[path[0].id] for token in path)
         total_path_freq += probs[path[0].id]
-    
+
     assert total_path_prob == pytest.approx(math.exp(z))
     assert total_path_freq == pytest.approx(1.0)
-    
 
 
 # --- UnigramModel tests ---
@@ -92,17 +99,17 @@ def test_unigram_model_tokenize(simple_model):
     tokens = simple_model.encode("ab", return_tokens=True)
     assert [t.text for t in tokens] == ["ab"]
 
-@pytest.mark.parametrize("text,expected", [
-    ("ab", [("ab",), ("a", "b")]),
-    ("a", [("a",)]),
-    ("b", [("b",)]),
-    ("x", []),
-])
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("ab", [("ab",), ("a", "b")]),
+        ("a", [("a",)]),
+        ("b", [("b",)]),
+        ("x", []),
+    ],
+)
 def test_unigram_model_make_lattice_paths(simple_model, text, expected):
     lattice = simple_model.make_lattice(text)
     all_paths = [tuple(t.text for t in p) for p, _ in lattice.all_paths()]
     assert set(all_paths) == set(expected)
-
-
-
-

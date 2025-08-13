@@ -7,25 +7,26 @@ from typing import List, Optional, Set
 def parse_exclusion_file(file_path: str) -> Set[str]:
     patterns = set()
     if file_path and os.path.exists(file_path):
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             for line in f:
                 line = line.strip()
-                if line and not line.startswith('#'):
+                if line and not line.startswith("#"):
                     patterns.add(line)
-    patterns.add('.git')
-    patterns.add('.vscode')
-    patterns.add('pthash')
+    patterns.add(".git")
+    patterns.add(".vscode")
+    patterns.add("pthash")
     return patterns
+
 
 def is_excluded(path: str, exclusion_patterns: Set[str]) -> bool:
     for pattern in exclusion_patterns:
-        if pattern.startswith('/') and pattern.endswith('/'):
+        if pattern.startswith("/") and pattern.endswith("/"):
             if path.startswith(pattern[1:]) or path == pattern[1:-1]:
                 return True
-        elif pattern.endswith('/'):
+        elif pattern.endswith("/"):
             if path.startswith(pattern) or path == pattern[:-1]:
                 return True
-        elif pattern.startswith('/'):
+        elif pattern.startswith("/"):
             if path == pattern[1:] or path.startswith(pattern[1:] + os.sep):
                 return True
         else:
@@ -33,8 +34,9 @@ def is_excluded(path: str, exclusion_patterns: Set[str]) -> bool:
                 return True
     return False
 
+
 def print_directory_structure(start_path: str, exclusion_patterns: Set[str]) -> str:
-    def _generate_tree(dir_path: str, prefix: str = '') -> List[str]:
+    def _generate_tree(dir_path: str, prefix: str = "") -> List[str]:
         entries = os.listdir(dir_path)
         entries = sorted(entries, key=lambda x: (not os.path.isdir(os.path.join(dir_path, x)), x.lower()))
         tree = []
@@ -44,11 +46,11 @@ def print_directory_structure(start_path: str, exclusion_patterns: Set[str]) -> 
                 continue
 
             if i == len(entries) - 1:
-                connector = '└── '
-                new_prefix = prefix + '    '
+                connector = "└── "
+                new_prefix = prefix + "    "
             else:
-                connector = '├── '
-                new_prefix = prefix + '│   '
+                connector = "├── "
+                new_prefix = prefix + "│   "
 
             full_path = os.path.join(dir_path, entry)
             if os.path.isdir(full_path):
@@ -58,11 +60,14 @@ def print_directory_structure(start_path: str, exclusion_patterns: Set[str]) -> 
                 tree.append(f"{prefix}{connector}{entry}")
         return tree
 
-    tree = ['/ '] + _generate_tree(start_path)
-    return '\n'.join(tree)
+    tree = ["/ "] + _generate_tree(start_path)
+    return "\n".join(tree)
 
-def scan_folder(start_path: str, file_types: Optional[List[str]], output_file: str, exclusion_patterns: Set[str]) -> None:
-    with open(output_file, 'w', encoding='utf-8') as out_file:
+
+def scan_folder(
+    start_path: str, file_types: Optional[List[str]], output_file: str, exclusion_patterns: Set[str]
+) -> None:
+    with open(output_file, "w", encoding="utf-8") as out_file:
         # Write the directory structure
         out_file.write("Directory Structure:\n")
         out_file.write("-------------------\n")
@@ -89,7 +94,7 @@ def scan_folder(start_path: str, file_types: Optional[List[str]], output_file: s
                     out_file.write("-" * 50 + "\n")
 
                     try:
-                        with open(file_path, 'r', encoding='utf-8') as in_file:
+                        with open(file_path, "r", encoding="utf-8") as in_file:
                             content = in_file.read()
                             out_file.write(content)
                     except Exception as e:
@@ -97,6 +102,7 @@ def scan_folder(start_path: str, file_types: Optional[List[str]], output_file: s
                         out_file.write(f"Error reading file: {str(e)}. Content skipped.\n")
 
                     out_file.write("\n\n")
+
 
 def main(args: List[str]) -> None:
     if len(args) < 3:
@@ -107,7 +113,7 @@ def main(args: List[str]) -> None:
     start_path: str = "."
     output_file: str = "repo.txt"
     exclusion_file: Optional[str] = ".gitignore"
-    file_types: Optional[List[str]] = [".py",".cpp",".hpp"]
+    file_types: Optional[List[str]] = [".py", ".cpp", ".hpp"]
 
     if len(args) > 1:
         start_path = args[1]
@@ -128,6 +134,7 @@ def main(args: List[str]) -> None:
 
     scan_folder(start_path, file_types, output_file, exclusion_patterns)
     print(f"Scan complete. Results written to {output_file}")
+
 
 if __name__ == "__main__":
     main(sys.argv)

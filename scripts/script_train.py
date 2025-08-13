@@ -38,5 +38,6 @@ def main(dataset_name="eng_latn_300mb", vocab_size=8000):
     save_tokenizer(tokenizer, outfile)
     print(f"\033[1;32m✨ Done! Tokenizer saved to {outfile}\033[0m")
 
+
 if __name__ == "__main__":
     main(sys.argv[1], int(sys.argv[2]))
