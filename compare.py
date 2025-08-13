@@ -1,3 +1,4 @@
+# heavily vibe coded comparison script for pyunigram vs hf and sentencepiece
 import argparse
 import os
 from dataclasses import dataclass, field
@@ -49,7 +50,7 @@ def get_texts(dataset_name):
     if dataset_name == "wikitext":
         return [text for text in load_dataset("wikitext", "wikitext-2-raw-v1", split="train")["text"] if text.strip()]
     elif dataset_name == "swift":
-        with open("swift_clean.txt", "r", encoding="utf-8") as f:
+        with open("./tests/data/swift_clean.txt", "r", encoding="utf-8") as f:
             return [line.strip() for line in f.readlines()]
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
@@ -218,12 +219,12 @@ def train_sentencepiece_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
     return result
 
 
-MY_PRETOK_REGEX = r" ?\p{L}+|\s+|[^\s\p{L}]+"
-_MY_PRETOK_PATTERN = re.compile(MY_PRETOK_REGEX)
+SPACES_PRETOK_REGEX = r" ?\p{L}+|\s+|[^\s\p{L}]+"
+SPACES_PRETOK_PATTERN = re.compile(SPACES_PRETOK_REGEX)
 
 
-def train_my_tokenizer(texts, name="My Unigram", *, pretokenization: str = "spaces", **kwargs) -> TokenizerResult:
-    """Train and test a human-implemented Unigram tokenizer.
+def train_pyunigram_tokenizer(texts, name="PyUnigram", *, pretokenization: str = "spaces", **kwargs) -> TokenizerResult:
+    """Train and test a PyUnigram tokenizer.
 
     Args:
         texts: List of text samples to test compression on
@@ -232,11 +233,11 @@ def train_my_tokenizer(texts, name="My Unigram", *, pretokenization: str = "spac
     Returns:
         TokenizerResult with token count and compression ratio
     """
-    print("\nTraining Human Unigram Tokenizer...")
+    print("\nTraining PyUnigram...")
 
     # Get pretokens (text chunks with frequencies)
     if pretokenization == "spaces":
-        pretokens = pretokenize_corpus(texts, regex_pattern=MY_PRETOK_REGEX)
+        pretokens = pretokenize_corpus(texts, regex_pattern=SPACES_PRETOK_REGEX)
     elif pretokenization == "gpt2":
         pretokens = pretokenize_corpus(texts)
     else:
@@ -413,7 +414,6 @@ def print_results(results: List[TokenizerResult], show_examples: bool = True):
 
 
 def parse_arguments():
-    """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Compare different tokenizers.")
     parser.add_argument("--no-examples", action="store_true", help="Do not show tokenization examples")
     parser.add_argument(
@@ -424,7 +424,6 @@ def parse_arguments():
 
 
 def main():
-    """Main function to run the tokenizer comparison."""
     args = parse_arguments()
 
     # Load dataset and prepare texts
@@ -437,14 +436,14 @@ def main():
 
     # Train and evaluate each tokenizer
     tokenizers = [
-        train_my_tokenizer(texts, "* My Unigram (spaces)", vocab_size=args.vocab_size),
-        train_my_tokenizer(
-            texts, "My Unigram shrink slow (spaces)", vocab_size=args.vocab_size, pruning_shrinking_factor=0.95
+        train_pyunigram_tokenizer(texts, "* PyUnigram (spaces)", vocab_size=args.vocab_size),
+        train_pyunigram_tokenizer(
+            texts, "PyUnigram shrink slow (spaces)", vocab_size=args.vocab_size, pruning_shrinking_factor=0.95
         ),
-        train_my_tokenizer(
-            texts, "My Unigram no m-step removals (spaces)", vocab_size=args.vocab_size, m_step_low_count_threshold=0
+        train_pyunigram_tokenizer(
+            texts, "PyUnigram no m-step removals (spaces)", vocab_size=args.vocab_size, m_step_low_count_threshold=0
         ),
-        train_my_tokenizer(texts, "My Unigram (gpt2)", vocab_size=args.vocab_size, pretokenization="gpt2"),
+        train_pyunigram_tokenizer(texts, "PyUnigram (gpt2)", vocab_size=args.vocab_size, pretokenization="gpt2"),
         train_hf_tokenizer(texts, args.vocab_size),
         train_sentencepiece_tokenizer(texts, args.vocab_size),
     ]
