@@ -55,6 +55,11 @@ def get_texts(dataset_name):
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
+def replace_spaces(text):
+    return text.replace(" ", "\u2581")
+
+def restore_spaces(text):
+    return text.replace("\u2581", " ")
 
 def train_hf_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
     """Train and test a Hugging Face Unigram tokenizer.
@@ -170,7 +175,7 @@ def train_sentencepiece_tokenizer(texts, vocab_size=20000) -> TokenizerResult:
     # Process all tokens
     for i in range(sp_processor.GetPieceSize()):
         token = sp_processor.IdToPiece(i)
-        vocab_stats.tokens.add(token.replace("\u2581", " "))
+        vocab_stats.tokens.add(restore_spaces(token))
 
         # Check for special tokens
         if token in special_tokens or (token.startswith("<") and token.endswith(">")):
@@ -236,8 +241,8 @@ def train_pyunigram_tokenizer(texts, name="PyUnigram", *, pretokenization: str =
     print("\nTraining PyUnigram...")
 
     # Get pretokens (text chunks with frequencies)
-    if pretokenization == "spaces":
-        pretokens = pretokenize_corpus(texts, regex_pattern=SPACES_PRETOK_REGEX)
+    if pretokenization == "spaces": # add prefix space like others
+        pretokens = pretokenize_corpus([' '+t for t in texts], regex_pattern=SPACES_PRETOK_REGEX)
     elif pretokenization == "gpt2":
         pretokens = pretokenize_corpus(texts)
     else:
@@ -251,19 +256,17 @@ def train_pyunigram_tokenizer(texts, name="PyUnigram", *, pretokenization: str =
     # Get vocabulary statistics
     vocab_stats = VocabularyStats(
         total_size=len(model.tokens_by_id),
-        one_char_tokens=sum(
-            1
-            for token in model.tokens_by_id.values()
-            if len(token.text) == 1 or (len(token.text) == 3 and token.text.startswith("â"))
-        ),  # Handle special chars
+        one_char_tokens=sum(len(token.text) == 1 for token in model.tokens_by_id.values()),
         tokens=set(token.text for token in model.tokens_by_id.values()),
     )
 
     # Tokenize example sentences
     examples = []
     for sentence in EXAMPLE_SENTENCES:
+        if pretokenization == "spaces":
+            sentence = ' '+sentence
         token_ids = model.encode(sentence)
-        token_strings = [model.tokens_by_id[id].text for id in token_ids]
+        token_strings = [replace_spaces(model.tokens_by_id[id].text) for id in token_ids]
         examples.append(TokenizationExample(original=sentence, tokens=token_strings, token_count=len(token_strings)))
 
     return TokenizerResult(
@@ -284,12 +287,13 @@ def calculate_similarity_matrix(tokenizers: List[TokenizerResult]) -> Dict[str, 
             if t2.name in jacard[t1.name]:
                 intersection = len(t1.vocab_stats.tokens & t2.vocab_stats.tokens)
                 union = len(t1.vocab_stats.tokens | t2.vocab_stats.tokens)
-                jacard[t1.name][t2.name] = (intersection / union) * 100 if union else 0
+                jacard[t1.name][t2.name] = (intersection / union) * 100
 
     return jacard
 
 
 def print_results(results: List[TokenizerResult], show_examples: bool = True):
+
     """Print the tokenizer comparison results and examples.
 
     Args:
